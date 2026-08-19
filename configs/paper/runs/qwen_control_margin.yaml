@@ -1,0 +1,6 @@
+schema_version: 1
+base_run: qwen_main.yaml
+name: qwen3_0p6b_c32_positive_negative_margin_mse_seed42
+training:
+  loss: positive_negative_margin_mse
+  seeds: [42]

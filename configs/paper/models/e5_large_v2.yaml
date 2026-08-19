@@ -1,0 +1,10 @@
+schema_version: 1
+label: e5_large_v2
+model_id: intfloat/e5-large-v2
+revision: f169b11e22de13617baa190a028a32f3493550b6
+trust_remote_code: false
+max_length: 512
+attention_implementation: eager
+query_template: "query: {text}"
+document_template: "passage: {text}"
+append_eos: false

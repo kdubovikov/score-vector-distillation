@@ -1,0 +1,110 @@
+schema_version: 1
+
+provenance:
+  provider: BEIR public dataset snapshots
+  citation:
+    title: "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models"
+    url: https://github.com/beir-cellar/beir
+  note: >-
+    The archive snapshots are distributed by BEIR. Original dataset citations
+    and licenses continue to apply. The reproduction code parses the normalized
+    snapshot files directly and does not depend on the BEIR Python package.
+    The pinned ArguAna archive has five qrel document IDs absent from its
+    corpus; they are preserved in evaluation to match BEIR metrics.
+  pin_verification: >-
+    SHA-256 values were computed from the public archives on 2026-07-13 and
+    cross-checked against the MD5 values published by the BEIR maintainers.
+datasets:
+  - name: SciFact
+    snapshot:
+      url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+      archive_name: scifact.zip
+      sha256: 536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165
+      upstream_md5: 5f7d1de60b170fc8027bb7898e2efca1
+  - name: NFCorpus
+    snapshot:
+      url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip
+      archive_name: nfcorpus.zip
+      sha256: efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b
+      upstream_md5: a89dba18a62ef92f7d323ec890a0d38d
+  - name: FiQA
+    snapshot:
+      url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip
+      archive_name: fiqa.zip
+      sha256: 32c7df99ed21252fdfb2cf3f5673502a8d245ee0c44c4a133570d92ce2b3ad02
+      upstream_md5: 17918ed23cd04fb15047f73e6c3bd9d9
+  - name: ArguAna
+    expected_missing_qrel_documents: 5
+    snapshot:
+      url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/arguana.zip
+      archive_name: arguana.zip
+      sha256: cfdf79adce27a401b3cd3ea267903134dbfab2c6afeb95d7fe5724a00bf7557b
+      upstream_md5: 8ad3e3c2a5867cdced806d6503f29b99
+  - name: SciDocs
+    snapshot:
+      url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scidocs.zip
+      archive_name: scidocs.zip
+      sha256: 96640201687767c9b1fcc5af7a80b90fb325b37fa25329c2586c25edcfa17ef1
+      upstream_md5: 38121350fc3a4d2f48850f6aff52e4a9
+  - name: TREC-COVID
+    snapshot:
+      url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/trec-covid.zip
+      archive_name: trec-covid.zip
+      sha256: 120f42a7864d2214234537733c0d2c6684e42fdfafff2c5eacf98afca6656aa0
+      upstream_md5: ce62140cb23feb9becf6270d0d1fe6d1
+  - name: Webis-Touche2020
+    snapshot:
+      url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/webis-touche2020.zip
+      archive_name: webis-touche2020.zip
+      sha256: 1a706ed9c03ecc75cf012495bd8e37b761f7b0350a939910d0f54862e26fc601
+      upstream_md5: 46f650ba5a527fc69e0a6521c5a23563
+  - name: Quora
+    snapshot:
+      url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/quora.zip
+      archive_name: quora.zip
+      sha256: 56aacd9dcc4d9c093b63f175afdda0e21cbc8442ecf6c717d09de7b358d77531
+      upstream_md5: 18fb154900ba42a600f84b839c173167
+
+row_construction:
+  candidates:
+    count: 32
+    positive_index: 0
+    strategy: tfidf
+    seed: 42
+    tfidf_max_features: 200000
+    tfidf_top_pool: 200
+    query_batch_size: 256
+    require_disjoint_query_ids: true
+  train:
+    - dataset: SciFact
+      split: train
+      expected_rows: 809
+    - dataset: NFCorpus
+      split: train
+      expected_rows: 2590
+    - dataset: FiQA
+      split: train
+      expected_rows: 5500
+  eval:
+    - dataset: SciFact
+      split: test
+      max_rows: 200
+      expected_rows: 200
+    - dataset: NFCorpus
+      split: dev
+      max_rows: 324
+      expected_rows: 324
+    - dataset: FiQA
+      split: dev
+      max_rows: 500
+      expected_rows: 500
+
+full_corpus_evaluation:
+  - {dataset: SciFact, split: test}
+  - {dataset: NFCorpus, split: test}
+  - {dataset: FiQA, split: test}
+  - {dataset: ArguAna, split: test}
+  - {dataset: SciDocs, split: test}
+  - {dataset: TREC-COVID, split: test}
+  - {dataset: Webis-Touche2020, split: test}
+  - {dataset: Quora, split: test}

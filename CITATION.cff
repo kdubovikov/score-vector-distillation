@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, cite the accompanying paper."
+title: "Score-Only Distillation for Compact Dense Retrieval"
+type: software
+version: 0.1.0
+authors:
+  - given-names: "Kirill"
+    family-names: "Dubovikov"
+  - given-names: "Martin"
+    family-names: "Takáč"
+  - given-names: "Salem"
+    family-names: "Lahlou"
+repository-code: "https://github.com/kdubovikov/score-vector-distillation"
+preferred-citation:
+  type: conference-paper
+  title: "Score-Only Distillation for Compact Dense Retrieval"
+  authors:
+    - given-names: "Kirill"
+      family-names: "Dubovikov"
+    - given-names: "Martin"
+      family-names: "Takáč"
+    - given-names: "Salem"
+      family-names: "Lahlou"
+  year: 2027

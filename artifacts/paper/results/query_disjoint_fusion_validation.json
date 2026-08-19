@@ -1,0 +1,38 @@
+{
+  "data": {
+    "candidate_count": 32,
+    "eval_rows": 200,
+    "eval_source": "scifact:test",
+    "train_eval_query_overlap": 0,
+    "train_rows": 809
+  },
+  "scorer_manifests": {
+    "count": 16,
+    "embedding_dim": 4096,
+    "models": {
+      "nv_embed": 8,
+      "qwen3_8b": 8
+    }
+  },
+  "scores": {
+    "nv_embed": {
+      "finite": true,
+      "rows": 200,
+      "score_width": 32
+    },
+    "qwen3_8b": {
+      "finite": true,
+      "rows": 200,
+      "score_width": 32
+    }
+  },
+  "status": "passed",
+  "sweep": {
+    "best_qwen_weight": 0.0,
+    "equal_minus_best_endpoint": -0.011956087194565757,
+    "equal_ndcg10": 0.8203614946753736,
+    "nv_ndcg10": 0.8323175818699393,
+    "qwen8_ndcg10": 0.7759544459841864,
+    "weights": 21
+  }
+}

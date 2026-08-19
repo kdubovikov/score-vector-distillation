@@ -1,0 +1,8 @@
+system_id,label,role,family,all8_ndcg10,ci_low,ci_high,base_system_id,parameters_b,query_latency_ms,document_latency_ms,metric_source,latency_source
+e5_large_base,E5-large base,base,e5_large,0.4873743839017322,,,,0.335,1.014971,3.414684,E005 unaffected base,MI210 batch-8 benchmark
+e5_large_equal,E5-large equal fusion,student,e5_large,0.5378518760920274,0.5362945982385631,0.5394091539454918,e5_large_base,0.335,1.419821,3.757281,E006 corrected three-seed reducer,MI210 batch-8 benchmark
+qwen_base,Qwen 0.6B base,base,qwen,0.5492365719530716,,,,0.6,2.807180,7.718505,E005 unaffected base,MI210 batch-8 benchmark
+qwen_equal,Qwen 0.6B equal fusion,student,qwen,0.5700156793303074,0.5681870981977387,0.5718442604628761,qwen_base,0.6,5.145682,10.131954,E006 corrected three-seed reducer,MI210 batch-8 benchmark
+qwen_c6,Qwen 0.6B hard-negative C6,extension,qwen,0.5595023154952378,0.5520791346967991,0.5669254962936764,qwen_base,0.6,5.183891,10.242481,E006 corrected C6 three-seed reducer,MI210 batch-8 benchmark
+qwen8_teacher,Qwen3-Embedding-8B,teacher,teacher,0.6202339744116337,,,,8.0,9.299708,43.915642,E005 corrected-runtime teacher evaluation,MI210 batch-8 benchmark
+online_fusion,Qwen8 plus NV online fusion,serving_reference,teacher,,,,,15.0,24.618394,99.702555,not plotted,derived sequential MI210 batch-8 benchmark

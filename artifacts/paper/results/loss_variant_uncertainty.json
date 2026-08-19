@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "metric": "all8_ndcg10",
+  "estimand": "equal macro-average of eight dataset query means",
+  "sample_structure": {
+    "datasets": 8,
+    "matched_queries": 13776,
+    "training_seeds_per_variant": 1
+  },
+  "comparisons": {
+    "centered_minus_rank_weighted": {
+      "fixed_panel_query_bootstrap_95_ci": [-0.0002403, 0.0037580],
+      "fixed_panel_query_randomization_p": 0.10518,
+      "dataset_sign_flip_p": 0.6953125,
+      "dataset_bootstrap_95_ci": [-0.0014225, 0.0064484],
+      "nested_dataset_query_bootstrap_95_ci": [-0.0019155, 0.0070502]
+    },
+    "centered_minus_unit_normalized": {
+      "fixed_panel_query_bootstrap_95_ci": [0.0007093, 0.0061922],
+      "fixed_panel_query_randomization_p": 0.01610,
+      "dataset_sign_flip_p": 0.2109375,
+      "dataset_bootstrap_95_ci": [-0.0007707, 0.0087765],
+      "nested_dataset_query_bootstrap_95_ci": [-0.0013219, 0.0097368]
+    }
+  },
+  "methods": {
+    "query_bootstrap": "50000 paired resamples stratified by fixed dataset; RNG seed 20260819",
+    "query_randomization": "100000 paired query-level sign flips preserving equal dataset macro weights; RNG seed 2026081903",
+    "dataset_sensitivity": "two-sided exact sign flip and dataset bootstrap over eight paired dataset effects"
+  },
+  "reporting_limit": "The unit-normalized variant is lower under fixed-panel query inference, but neither comparison establishes a robust ordering across datasets or training randomness; all variants use seed 42 only."
+}

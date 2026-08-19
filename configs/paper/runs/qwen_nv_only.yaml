@@ -1,0 +1,9 @@
+schema_version: 1
+base_run: qwen_main.yaml
+name: qwen3_0p6b_c32_nv_embed_v2_scores
+teacher_configs:
+  - ../models/nv_embed_v2.yaml
+teacher_weights:
+  nv_embed_v2: 1.0
+training:
+  seeds: [42]

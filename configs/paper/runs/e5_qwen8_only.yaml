@@ -1,0 +1,9 @@
+schema_version: 1
+base_run: e5_main.yaml
+name: e5_large_v2_c32_qwen3_8b_scores
+teacher_configs:
+  - ../models/qwen3_8b.yaml
+teacher_weights:
+  qwen3_8b: 1.0
+training:
+  seeds: [42]

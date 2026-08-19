@@ -1,0 +1,45 @@
+schema_version: 1
+config_kind: executable_run
+name: qwen3_0p6b_c32_score_vector_distillation
+data_config: ../data/eight_task_panel.yaml
+student_config: ../models/qwen3_0p6b.yaml
+teacher_configs:
+  - ../models/qwen3_8b.yaml
+  - ../models/nv_embed_v2.yaml
+teacher_weights:
+  qwen3_8b: 0.5
+  nv_embed_v2: 0.5
+training:
+  loss: centered_mse
+  epochs: 1
+  seeds: [42, 43, 44]
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 2
+  reference_world_size: 8
+  effective_batch_size: 16
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  scheduler: cosine
+  max_gradient_norm: 1.0
+  parameter_dtype: float32
+  mixed_precision: none
+  backbone_gradient_checkpointing: false
+  lora:
+    rank: 256
+    alpha: 512
+    dropout: 0.05
+    target_modules: all-linear
+  candidate_checkpointing:
+    document_chunk_size: 4
+    preserve_rng_state: true
+    encode_query_once: true
+reference_hardware:
+  accelerator: AMD MI210
+  count: 8
+evaluation:
+  primary_metric: NDCG@10
+  metric_k_values: [10, 100]
+  similarity: normalized_cosine
+  aggregation: dataset_macro
+  top_k: 100

@@ -1,0 +1,8 @@
+row_source,loss,seed,all8_ndcg10,evidence_status
+C32,centered_mse,42,0.5707064385361597,corrected_e006
+C32,rank_weighted_pair_mse,42,0.5689727256383268,corrected_e006
+C32,unit_centered_mse,42,0.5672539659506857,corrected_e006
+C32,positive_negative_margin_mse,42,0.5571161570898967,corrected_e006
+C32,label_only_cross_entropy,42,0.4066542810402647,corrected_e005_unaffected
+hard_negative_C6,centered_mse,42,0.5620197955346482,corrected_e006
+hard_negative_C6,positive_negative_margin_mse,42,0.5286457845703973,corrected_e006

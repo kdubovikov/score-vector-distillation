@@ -1,0 +1,16 @@
+schema_version: 1
+label: qwen3_8b
+model_id: Qwen/Qwen3-Embedding-8B
+revision: 1d8ad4ca9b3dd8059ad90a75d4983776a23d44af
+trust_remote_code: true
+max_length: 512
+attention_implementation: eager
+query_template: |-
+  Instruct: Given a web search query, retrieve relevant passages that answer the query
+  Query:{text}
+document_template: "{text}"
+append_eos: false
+teacher_scoring:
+  dtype: bfloat16
+  query_batch_size: 4
+  document_batch_size: 2

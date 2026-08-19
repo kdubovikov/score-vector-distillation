@@ -1,0 +1,47 @@
+.DS_Store
+.coverage
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.venv-*/
+.venv_*/
+__pycache__/
+/build/
+/dist/
+*.egg-info/
+*.py[cod]
+
+# Local and generated artifacts.
+.env
+.env.*
+!.env.example
+/artifacts/downloads/
+/artifacts/e006_analysis/
+/artifacts/evaluation/
+/artifacts/runs/
+/data/
+/experiments/
+/logs/
+/outputs/
+/tmp/
+/wandb/
+
+# Internal campaign regression tests depend on the excluded cluster bundles.
+/tests/unit/test_core_eval_campaign.py
+/tests/unit/test_e006_*.py
+/tests/unit/test_evaluator_alignment.py
+/tests/unit/test_full_scoring_pipeline.py
+/tests/unit/test_paper_reevaluation.py
+/tests/unit/test_proxy_*.py
+
+# Generated experiment payloads.
+*.npy
+*.npz
+*.whl
+*.bin
+*.ckpt
+*.parquet
+*.pt
+*.pth
+*.safetensors

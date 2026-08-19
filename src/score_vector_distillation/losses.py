@@ -1,0 +1,133 @@
+"""Losses for distilling a teacher score vector into a student retriever.
+
+The primary objective operates directly on a ``[batch, candidates]`` residual
+matrix.  It is therefore linear in the number of candidate scores and never
+materializes candidate pairs.
+"""
+
+from __future__ import annotations
+
+import torch
+from torch import Tensor
+from torch.nn import functional
+
+__all__ = [
+    "centered_mse_loss",
+    "positive_negative_margin_mse_loss",
+    "rank_weighted_pair_mse_loss",
+    "unit_centered_mse_loss",
+]
+
+
+def _validate_score_vectors(student_scores: Tensor, teacher_scores: Tensor) -> None:
+    """Validate the common score-vector contract."""
+    if student_scores.ndim != 2 or teacher_scores.ndim != 2:
+        raise ValueError(
+            "student_scores and teacher_scores must both have shape "
+            f"[batch, candidates]; got {tuple(student_scores.shape)} and "
+            f"{tuple(teacher_scores.shape)}."
+        )
+    if student_scores.shape != teacher_scores.shape:
+        raise ValueError(
+            "student_scores and teacher_scores must have identical shapes; "
+            f"got {tuple(student_scores.shape)} and {tuple(teacher_scores.shape)}."
+        )
+    if student_scores.shape[0] == 0 or student_scores.shape[1] == 0:
+        raise ValueError("score vectors must contain at least one row and one candidate.")
+    if not student_scores.is_floating_point() or not teacher_scores.is_floating_point():
+        raise TypeError("student_scores and teacher_scores must be floating-point tensors.")
+    if student_scores.device != teacher_scores.device:
+        raise ValueError(
+            "student_scores and teacher_scores must be on the same device; "
+            f"got {student_scores.device} and {teacher_scores.device}."
+        )
+
+
+def centered_mse_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:
+    """Return mean squared error after removing each row's additive offset.
+
+    Let ``r = student_scores - teacher_scores``.  This computes
+
+    ``mean((r - mean(r, dim=1)) ** 2)``.
+
+    The implementation uses :math:`O(Bk)` time and memory.  Under the paper's
+    ordered-pair normalization, the explicit all-pairs loss is exactly twice
+    this value; pair tensors are intentionally absent from the production
+    implementation.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    residuals = student_scores - teacher_scores
+    centered_residuals = residuals - residuals.mean(dim=1, keepdim=True)
+    return centered_residuals.square().mean()
+
+
+def positive_negative_margin_mse_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:
+    """Return MarginMSE between candidate zero and every remaining candidate.
+
+    Candidate zero is the positive.  A one-candidate row has no comparison and
+    returns a differentiable zero.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    if student_scores.shape[1] == 1:
+        return student_scores.sum() * 0.0
+
+    student_margins = student_scores[:, :1] - student_scores[:, 1:]
+    teacher_margins = teacher_scores[:, :1] - teacher_scores[:, 1:]
+    return functional.mse_loss(student_margins, teacher_margins)
+
+
+def unit_centered_mse_loss(
+    student_scores: Tensor,
+    teacher_scores: Tensor,
+    *,
+    eps: float = 1e-12,
+) -> Tensor:
+    """Return MSE between row-centered, unit-norm score vectors."""
+    _validate_score_vectors(student_scores, teacher_scores)
+    if eps <= 0.0:
+        raise ValueError(f"eps must be positive; got {eps}.")
+
+    centered_student = student_scores - student_scores.mean(dim=1, keepdim=True)
+    centered_teacher = teacher_scores - teacher_scores.mean(dim=1, keepdim=True)
+    unit_student = functional.normalize(centered_student, p=2.0, dim=1, eps=eps)
+    unit_teacher = functional.normalize(centered_teacher, p=2.0, dim=1, eps=eps)
+    return functional.mse_loss(unit_student, unit_teacher)
+
+
+def rank_weighted_pair_mse_loss(
+    student_scores: Tensor,
+    teacher_scores: Tensor,
+    *,
+    eps: float = 1e-12,
+) -> Tensor:
+    """Return the teacher-rank-weighted pairwise control objective.
+
+    This supplementary control deliberately materializes the upper-triangular
+    candidate pairs and therefore uses :math:`O(Bk^2)` memory.  It is separate
+    from :func:`centered_mse_loss`, the linear-memory primary objective.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    if eps <= 0.0:
+        raise ValueError(f"eps must be positive; got {eps}.")
+    candidate_count = student_scores.shape[1]
+    if candidate_count == 1:
+        return student_scores.sum() * 0.0
+
+    pair_i, pair_j = torch.triu_indices(
+        candidate_count,
+        candidate_count,
+        offset=1,
+        device=student_scores.device,
+    )
+    student_pair_margins = student_scores[:, pair_i] - student_scores[:, pair_j]
+    teacher_pair_margins = teacher_scores[:, pair_i] - teacher_scores[:, pair_j]
+
+    teacher_order = torch.argsort(teacher_scores, dim=1, descending=True, stable=True)
+    teacher_ranks = torch.empty_like(teacher_order)
+    rank_values = torch.arange(candidate_count, device=teacher_scores.device).expand_as(teacher_order)
+    teacher_ranks.scatter_(1, teacher_order, rank_values)
+
+    best_pair_rank = torch.minimum(teacher_ranks[:, pair_i], teacher_ranks[:, pair_j]).to(dtype=student_scores.dtype)
+    pair_weights = torch.log2(best_pair_rank + 2.0).reciprocal()
+    pair_weights = pair_weights / pair_weights.mean(dim=1, keepdim=True).clamp_min(eps)
+    return ((student_pair_margins - teacher_pair_margins).square() * pair_weights).mean()

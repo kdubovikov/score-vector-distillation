@@ -1,0 +1,9 @@
+student,target,all8_ndcg10,ci_low,ci_high,delta_vs_base,delta_ci_low,delta_ci_high,evidence_status
+Qwen3-Embedding-0.6B,base,0.5492365719530716,,,0.0,,,corrected_e005_unaffected
+Qwen3-Embedding-0.6B,Qwen3-Embedding-8B,0.5631368234181985,,,0.0139002514651269,,,corrected_e006_seed42
+Qwen3-Embedding-0.6B,NV-Embed-v2,0.5602052054665789,,,0.0109686335135073,,,corrected_e005_unaffected_seed42
+Qwen3-Embedding-0.6B,equal score fusion,0.5700156793303074,0.5681870981977387,0.5718442604628761,0.0207791073772358,0.0189505262446671,0.0226076885098045,corrected_e006_three_seed_t_ci
+E5-large-v2,base,0.4873743839017322,,,0.0,,,corrected_e005_unaffected
+E5-large-v2,Qwen3-Embedding-8B,0.5324682648726029,,,0.0450938809708707,,,corrected_e006_seed42
+E5-large-v2,NV-Embed-v2,0.5303343955364657,,,0.0429600116347335,,,corrected_e005_unaffected_seed42
+E5-large-v2,equal score fusion,0.5378518760920274,0.5362945982385631,0.5394091539454918,0.0504774921902952,0.0489202143368309,0.0520347700437596,corrected_e006_three_seed_t_ci

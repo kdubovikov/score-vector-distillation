@@ -1,0 +1,9 @@
+schema_version: 1
+name: synthetic_cpu_smoke
+seed: 42
+rows: 8
+candidate_count: 4
+embedding_dim: 16
+steps: 2
+document_chunk_size: 3
+dropout: 0.05

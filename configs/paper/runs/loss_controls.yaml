@@ -1,0 +1,14 @@
+schema_version: 1
+config_kind: sweep_index
+name: qwen_c32_loss_controls
+base_run: qwen_main.yaml
+seed: 42
+controls:
+  - centered_mse
+  - rank_weighted_pair_mse
+  - unit_centered_mse
+  - positive_negative_margin_mse
+  - label_only_cross_entropy
+notes:
+  ordered_pair_identity: ordered_pair_mse_equals_2x_centered_mse
+  production_pair_tensor: false

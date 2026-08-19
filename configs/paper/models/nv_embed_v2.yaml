@@ -1,0 +1,20 @@
+schema_version: 1
+label: nv_embed_v2
+model_id: nvidia/NV-Embed-v2
+revision: 3fa59658547db50a1e8e3346cf057fd0c77ed6ef
+trust_remote_code: true
+max_length: 32768
+attention_implementation: eager
+query_template: |-
+  Instruct: {instruction}
+  Query: {text}
+document_template: "{text}"
+append_eos: true
+teacher_scoring:
+  dtype: bfloat16
+  query_batch_size: 1
+  document_batch_size: 1
+dataset_instructions:
+  scifact: Given a scientific claim, retrieve documents that support or refute the claim
+  nfcorpus: Given a question, retrieve relevant documents that answer the question
+  fiqa: Given a financial question, retrieve relevant passages that answer the query

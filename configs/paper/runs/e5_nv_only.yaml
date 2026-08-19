@@ -1,0 +1,9 @@
+schema_version: 1
+base_run: e5_main.yaml
+name: e5_large_v2_c32_nv_embed_v2_scores
+teacher_configs:
+  - ../models/nv_embed_v2.yaml
+teacher_weights:
+  nv_embed_v2: 1.0
+training:
+  seeds: [42]

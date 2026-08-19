@@ -1,0 +1,45 @@
+schema_version: 1
+config_kind: executable_run
+name: e5_large_v2_c32_score_vector_distillation
+data_config: ../data/eight_task_panel.yaml
+student_config: ../models/e5_large_v2.yaml
+teacher_configs:
+  - ../models/qwen3_8b.yaml
+  - ../models/nv_embed_v2.yaml
+teacher_weights:
+  qwen3_8b: 0.5
+  nv_embed_v2: 0.5
+training:
+  loss: centered_mse
+  epochs: 1
+  seeds: [42, 43, 44]
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 8
+  reference_world_size: 1
+  effective_batch_size: 8
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  scheduler: cosine
+  max_gradient_norm: 1.0
+  parameter_dtype: float32
+  mixed_precision: none
+  backbone_gradient_checkpointing: false
+  lora:
+    rank: 64
+    alpha: 128
+    dropout: 0.05
+    target_modules: [query, value]
+  candidate_checkpointing:
+    document_chunk_size: 0
+    preserve_rng_state: true
+    encode_query_once: true
+reference_hardware:
+  accelerator: AMD MI210
+  count: 1
+evaluation:
+  primary_metric: NDCG@10
+  metric_k_values: [10, 100]
+  similarity: normalized_cosine
+  aggregation: dataset_macro
+  top_k: 100
