@@ -4,22 +4,6 @@ Reference implementation for [**Score-Only Distillation for Compact Dense Retrie
 
 The method transfers a teacher ensemble's relative preferences over a fixed candidate row into a compact bi-encoder. It needs only scalar teacher scores: no hidden states, tokenizer sharing, or teacher gradients.
 
-## Method in one equation
-
-For student scores \(s\in\mathbb{R}^{B\times k}\) and teacher scores \(t\), define residuals \(r=s-t\). The training objective is
-
-\[
-\mathcal{L}_{\mathrm{centered}}
-= \frac{1}{Bk}\sum_{b=1}^{B}\sum_{i=1}^{k}
-\left(r_{bi}-\bar r_b\right)^2.
-\]
-
-\[
-\mathcal{L}_{\mathrm{ordered\ pairs}}=2\,\mathcal{L}_{\mathrm{centered}}.
-\]
-
-Provided unit tests compare both values and gradients against an explicit \(O(Bk^2)\) construction.
-
 ## Training update
 
 Every training update follows one explicit path:
