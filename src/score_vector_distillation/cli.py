@@ -107,6 +107,11 @@ def _add_teacher_score_parser(subparsers: Any) -> None:
     parser.add_argument("--document-batch-size", type=int)
     parser.add_argument("--dtype", choices=["float32", "bfloat16", "float16"])
     parser.add_argument(
+        "--pair-batch-size",
+        type=int,
+        help="Cross-encoder reranker teachers only: (query, document) pairs per forward pass.",
+    )
+    parser.add_argument(
         "--shard-index",
         type=int,
         help="Zero-based stride shard index. Must be used with --shard-count.",
@@ -262,6 +267,11 @@ def _handle_teacher_score(args: argparse.Namespace) -> dict[str, Any]:
     from score_vector_distillation.teachers.scoring import ScoringRow, score_candidate_rows, write_score_table
 
     model_config = load_config(args.model_config)
+    teacher_kind = str(model_config.data.get("teacher_kind", "embedding"))
+    if teacher_kind == "qwen3_yes_no_reranker":
+        return _handle_reranker_teacher_score(args, model_config)
+    if teacher_kind != "embedding":
+        raise ValueError(f"Unsupported teacher_kind {teacher_kind!r}.")
     profile = profile_from_mapping(model_config.data)
     raw_scoring = model_config.data.get("teacher_scoring", {})
     if not isinstance(raw_scoring, dict):
@@ -331,6 +341,83 @@ def _handle_teacher_score(args: argparse.Namespace) -> dict[str, Any]:
         "query_batch_size": query_batch_size,
         "document_batch_size": document_batch_size,
         "resolved_attention_implementation": effective_attention,
+    }
+
+
+def _handle_reranker_teacher_score(args: argparse.Namespace, model_config: Any) -> dict[str, Any]:
+    """Materialize score-only yes/no cross-encoder log-odds as a standard score table."""
+
+    import torch
+
+    from score_vector_distillation.data.candidates import read_candidate_rows_jsonl
+    from score_vector_distillation.teachers.reranker import (
+        DEFAULT_INSTRUCTION,
+        DEFAULT_MAX_DOCUMENT_TOKENS,
+        FORMAT_ID,
+        load_qwen3_reranker,
+        score_reranker_rows,
+    )
+    from score_vector_distillation.teachers.scoring import ScoringRow, write_score_table
+
+    data = model_config.data
+    for key in ("label", "model_id", "revision"):
+        if not isinstance(data.get(key), str) or not data[key].strip():
+            raise ValueError(f"Reranker model config field {key!r} must be a non-empty string.")
+    raw_scoring = data.get("teacher_scoring", {})
+    if not isinstance(raw_scoring, dict):
+        raise ValueError("Model config teacher_scoring must be a mapping.")
+    dtype_name = str(args.dtype or raw_scoring.get("dtype", "bfloat16"))
+    dtypes = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
+    pair_batch_size = int(args.pair_batch_size or raw_scoring.get("pair_batch_size", 16))
+    max_batch_tokens = raw_scoring.get("max_batch_tokens")
+    max_batch_tokens = None if max_batch_tokens is None else int(max_batch_tokens)
+    device = str(args.device)
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    attention = str(data.get("attention_implementation", "sdpa"))
+    if args.require_resolved_attention is not None and attention != args.require_resolved_attention:
+        raise RuntimeError(
+            f"Configured attention {attention!r} differs from required {args.require_resolved_attention!r}."
+        )
+    source_rows = read_candidate_rows_jsonl(args.rows)
+    rows = _select_stride_shard(source_rows, shard_index=args.shard_index, shard_count=args.shard_count)
+    scorer, provenance = load_qwen3_reranker(
+        data["model_id"],
+        data["revision"],
+        device=device,
+        dtype=dtypes[dtype_name],
+        attention_implementation=attention,
+        instruction=str(data.get("instruction", DEFAULT_INSTRUCTION)),
+        max_document_tokens=int(data.get("max_document_tokens", DEFAULT_MAX_DOCUMENT_TOKENS)),
+    )
+    if args.require_resolved_attention is not None and provenance["attention_implementation"] != attention:
+        raise RuntimeError(
+            "Loaded reranker resolved an unexpected attention implementation: "
+            f"required {attention!r}, got {provenance['attention_implementation']!r}."
+        )
+    scored = score_reranker_rows(
+        scorer,
+        [ScoringRow(row_id=r.row_id, query_text=r.query_text, candidate_texts=r.candidate_texts) for r in rows],
+        batch_size=pair_batch_size,
+        max_batch_tokens=max_batch_tokens,
+    )
+    write_score_table(scored, args.output, model_label=data["label"])
+    timings = scorer.last_timings
+    return {
+        "path": str(args.output),
+        "rows": len(scored),
+        "source_rows": len(source_rows),
+        "shard_index": args.shard_index,
+        "shard_count": args.shard_count,
+        "model_label": data["label"],
+        "teacher_kind": "qwen3_yes_no_reranker",
+        "format_id": FORMAT_ID,
+        "pair_batch_size": pair_batch_size,
+        "max_batch_tokens": max_batch_tokens,
+        "pairs": None if timings is None else timings.pairs,
+        "score_seconds": None if timings is None else timings.seconds,
+        "pairs_per_second": None if timings is None else timings.pairs_per_second,
+        **provenance,
     }
 
 
