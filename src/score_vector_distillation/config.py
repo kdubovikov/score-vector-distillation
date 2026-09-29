@@ -30,10 +30,12 @@ class DistillationLoss(StrEnum):
     """Losses implemented by :class:`ScoreVectorStudent`."""
 
     CENTERED_MSE = "centered_mse"
+    FORWARD_KL_TAU_0P1 = "forward_kl_tau_0p1"
     POSITIVE_NEGATIVE_MARGIN_MSE = "positive_negative_margin_mse"
     UNIT_CENTERED_MSE = "unit_centered_mse"
     RANK_WEIGHTED_PAIR_MSE = "rank_weighted_pair_mse"
     LABEL_ONLY_CROSS_ENTROPY = "label_only_cross_entropy"
+    LABEL_ONLY_INBATCH_CROSS_ENTROPY = "label_only_inbatch_cross_entropy"
 
 
 class SchedulerKind(StrEnum):
@@ -280,6 +282,7 @@ class TrainingConfig:
     lora: LoraConfig
     candidate_checkpointing: CandidateCheckpointingConfig
     eval_batch_size: int = 1
+    loss_temperature: float | None = None
 
     @classmethod
     def from_mapping(cls, value: object, *, context: str = "training") -> Self:
@@ -305,7 +308,12 @@ class TrainingConfig:
                 "candidate_checkpointing",
             }
         )
-        _validate_keys(values, context=context, required=required, optional=frozenset({"eval_batch_size"}))
+        _validate_keys(
+            values,
+            context=context,
+            required=required,
+            optional=frozenset({"eval_batch_size", "loss_temperature"}),
+        )
         raw_seeds = values["seeds"]
         if not isinstance(raw_seeds, list) or not raw_seeds:
             raise ConfigError(f"{context}.seeds must be a non-empty list of integers.")
@@ -370,7 +378,28 @@ class TrainingConfig:
                 values.get("eval_batch_size", 1),
                 context=f"{context}.eval_batch_size",
             ),
+            loss_temperature=(
+                None
+                if values.get("loss_temperature") is None
+                else _number(
+                    values["loss_temperature"],
+                    context=f"{context}.loss_temperature",
+                    minimum=0.0,
+                    maximum_inclusive=False,
+                )
+            ),
         )
+        raw_loss = values["loss"]
+        if raw_loss == DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY and settings.loss_temperature is None:
+            raise ConfigError(
+                f"{context}.loss_temperature is required when {context}.loss="
+                f"{DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY.value!r}."
+            )
+        if raw_loss != DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY and settings.loss_temperature is not None:
+            raise ConfigError(
+                f"{context}.loss_temperature is only supported when {context}.loss="
+                f"{DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY.value!r}."
+            )
         expected_batch = (
             settings.per_device_batch_size * settings.gradient_accumulation_steps * settings.reference_world_size
         )

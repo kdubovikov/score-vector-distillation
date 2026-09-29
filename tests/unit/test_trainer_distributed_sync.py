@@ -53,7 +53,7 @@ def _prepared() -> Any:
         document_chunk_size=4,
         run=SimpleNamespace(
             sha256="run-sha",
-            training=SimpleNamespace(loss=DistillationLoss.CENTERED_MSE),
+            training=SimpleNamespace(loss=DistillationLoss.CENTERED_MSE, loss_temperature=None),
         ),
         student_config=SimpleNamespace(sha256="student-sha"),
     )

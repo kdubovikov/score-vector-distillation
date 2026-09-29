@@ -7,12 +7,15 @@ materializes candidate pairs.
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import Tensor
 from torch.nn import functional
 
 __all__ = [
     "centered_mse_loss",
+    "forward_kl_loss",
     "positive_negative_margin_mse_loss",
     "rank_weighted_pair_mse_loss",
     "unit_centered_mse_loss",
@@ -59,6 +62,27 @@ def centered_mse_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:
     residuals = student_scores - teacher_scores
     centered_residuals = residuals - residuals.mean(dim=1, keepdim=True)
     return centered_residuals.square().mean()
+
+
+def forward_kl_loss(
+    student_scores: Tensor,
+    teacher_scores: Tensor,
+    *,
+    temperature: float = 0.1,
+) -> Tensor:
+    """Return temperature-squared forward KL, summed over candidates, averaged over rows.
+
+    Both distributions use the same temperature. Teacher targets are detached.
+    The fixed ``forward_kl_tau_0p1`` training recipe uses the historical 0.1
+    temperature and multiplier tau**2 (not 2*tau**2). In the high-temperature
+    limit this approaches half the centered-MSE loss and gradient.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    if not math.isfinite(temperature) or temperature <= 0:
+        raise ValueError("temperature must be finite and positive.")
+    student_log_probs = functional.log_softmax(student_scores / temperature, dim=-1)
+    teacher_probs = functional.softmax(teacher_scores.detach() / temperature, dim=-1)
+    return temperature**2 * functional.kl_div(student_log_probs, teacher_probs, reduction="batchmean")
 
 
 def positive_negative_margin_mse_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:

@@ -26,6 +26,7 @@ __all__ = [
     "Encoder",
     "TensorBatch",
     "checkpointed_centered_mse_loss",
+    "checkpointed_row_embeddings",
     "checkpointed_row_scores",
 ]
 
@@ -128,6 +129,133 @@ def _make_checkpointed_chunk_scorer(
         return torch.einsum("bd,bkd->bk", query_embeddings, document_embeddings)
 
     return score_chunk
+
+
+def _make_checkpointed_chunk_embedder(
+    encode_documents: Encoder,
+    *,
+    document_keys: Sequence[str],
+    batch_size: int,
+    chunk_width: int,
+    normalize_embeddings: bool,
+    normalization_eps: float,
+) -> Callable[..., Tensor]:
+    """Bind loop-local metadata for a checkpointed chunk that returns embeddings.
+
+    Unlike :func:`_make_checkpointed_chunk_scorer`, this keeps the normalized
+    ``[batch, chunk_width, dim]`` document embeddings themselves rather than
+    collapsing them into a dot product with the query. Callers that need a
+    full cross-batch (or cross-process) score matrix, such as in-batch
+    negative losses, still benefit from checkpointing the document encoder's
+    activations even though the final embeddings must be materialized.
+    """
+    frozen_keys = tuple(document_keys)
+
+    def embed_chunk(_differentiable_proxy: Tensor, *flat_document_values: Tensor) -> Tensor:
+        del _differentiable_proxy  # Only present so reentrant checkpointing has a differentiable input.
+        document_batch = dict(zip(frozen_keys, flat_document_values, strict=True))
+        document_embeddings = encode_documents(document_batch)
+        _validate_encoder_output(
+            "encode_documents",
+            document_embeddings,
+            batch_size * chunk_width,
+        )
+        if normalize_embeddings:
+            document_embeddings = functional.normalize(
+                document_embeddings,
+                p=2.0,
+                dim=1,
+                eps=normalization_eps,
+            )
+        return document_embeddings.view(batch_size, chunk_width, -1)
+
+    return embed_chunk
+
+
+def checkpointed_row_embeddings(
+    *,
+    encode_queries: Encoder,
+    encode_documents: Encoder,
+    query_inputs: TensorBatch,
+    document_inputs: TensorBatch,
+    document_chunk_size: int,
+    normalize_embeddings: bool = True,
+    normalization_eps: float = 1e-12,
+) -> tuple[Tensor, Tensor]:
+    """Encode one query per row and return normalized query/candidate embeddings.
+
+    Returns ``(query_embeddings, document_embeddings)`` with shapes
+    ``[batch, dim]`` and ``[batch, candidates, dim]``. The document encoder
+    still runs under activation checkpointing per chunk; only the small final
+    embeddings are retained across chunks, matching the memory profile of
+    :func:`checkpointed_row_scores`. Callers that need cross-batch or
+    cross-process candidate pools (e.g. in-batch negative losses) can combine
+    the returned embeddings across rows or processes before scoring.
+    """
+    if document_chunk_size <= 0:
+        raise ValueError(f"document_chunk_size must be positive; got {document_chunk_size}.")
+    if normalization_eps <= 0.0:
+        raise ValueError(f"normalization_eps must be positive; got {normalization_eps}.")
+
+    (query_batch_size,) = _batch_shape(query_inputs, document_rows=False)
+    document_batch_size, candidate_count = _batch_shape(document_inputs, document_rows=True)
+    if query_batch_size != document_batch_size:
+        raise ValueError(
+            f"query and document batch sizes must match; got {query_batch_size} and {document_batch_size}."
+        )
+
+    query_embeddings = encode_queries(query_inputs)
+    _validate_encoder_output("encode_queries", query_embeddings, query_batch_size)
+    if normalize_embeddings:
+        query_embeddings = functional.normalize(
+            query_embeddings,
+            p=2.0,
+            dim=1,
+            eps=normalization_eps,
+        )
+
+    embedding_chunks: list[Tensor] = []
+    for start in range(0, candidate_count, document_chunk_size):
+        end = min(start + document_chunk_size, candidate_count)
+        document_keys, flat_document_values = _flatten_document_chunk(
+            document_inputs,
+            start=start,
+            end=end,
+        )
+        embed_chunk = _make_checkpointed_chunk_embedder(
+            encode_documents,
+            document_keys=document_keys,
+            batch_size=query_batch_size,
+            chunk_width=end - start,
+            normalize_embeddings=normalize_embeddings,
+            normalization_eps=normalization_eps,
+        )
+        if torch.is_grad_enabled():
+            use_reentrant = _requires_reentrant_checkpoint(torch.__version__)
+            checkpoint_proxy = query_embeddings
+            if use_reentrant and not checkpoint_proxy.requires_grad:
+                # See checkpointed_row_scores: reentrant checkpointing requires
+                # at least one differentiable input even when only the
+                # document encoder's own parameters need gradients.
+                checkpoint_proxy = checkpoint_proxy.detach().requires_grad_()
+            chunk_embeddings = checkpoint(
+                embed_chunk,
+                checkpoint_proxy,
+                *flat_document_values,
+                use_reentrant=use_reentrant,
+                preserve_rng_state=True,
+            )
+        else:
+            chunk_embeddings = embed_chunk(query_embeddings, *flat_document_values)
+        embedding_chunks.append(chunk_embeddings)
+
+    document_embeddings = torch.cat(embedding_chunks, dim=1)
+    if document_embeddings.shape[-1] != query_embeddings.shape[-1]:
+        raise ValueError(
+            "query and document embedding dimensions must match; "
+            f"got {query_embeddings.shape[-1]} and {document_embeddings.shape[-1]}."
+        )
+    return query_embeddings, document_embeddings
 
 
 def checkpointed_row_scores(

@@ -287,6 +287,7 @@ def _validate_candidate_rows(
     device: torch.device,
     document_chunk_size: int,
     loss_kind: DistillationLoss,
+    loss_temperature: float | None = None,
 ) -> dict[str, float | int]:
     """Measure held-out distillation loss, not full-corpus retrieval quality."""
 
@@ -302,6 +303,12 @@ def _validate_candidate_rows(
             teacher,
             document_chunk_size=document_chunk_size,
             loss=loss_kind,
+            candidate_ids=batch.get("candidate_ids"),
+            loss_temperature=loss_temperature,
+            # This loop runs unsharded on the main process only (see the
+            # module docstring above); calling a distributed collective here
+            # would hang waiting on ranks that never reach it.
+            gather_across_processes=False,
         )
         losses.append(float(validation_loss.cpu()))
         rows += int(teacher.shape[0])
@@ -511,6 +518,7 @@ def _validate_and_checkpoint_epoch(
             device=accelerator.device,
             document_chunk_size=prepared.document_chunk_size,
             loss_kind=prepared.run.training.loss,
+            loss_temperature=prepared.run.training.loss_temperature,
         )
         _append_metric(
             metrics_path,
@@ -596,6 +604,8 @@ def _run_training_epochs(
                     teacher,
                     document_chunk_size=prepared.document_chunk_size,
                     loss=training.loss,
+                    candidate_ids=batch.get("candidate_ids"),
+                    loss_temperature=training.loss_temperature,
                 )
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
