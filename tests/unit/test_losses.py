@@ -8,6 +8,7 @@ from torch import Tensor
 
 from score_vector_distillation.losses import (
     centered_mse_loss,
+    margin_only_loss,
     positive_negative_margin_mse_loss,
     rank_weighted_pair_mse_loss,
     unit_centered_mse_loss,
@@ -110,3 +111,97 @@ def test_rank_weighted_pair_control_matches_manual_teacher_rank_weights() -> Non
 def test_losses_reject_mismatched_shapes() -> None:
     with pytest.raises(ValueError, match="identical shapes"):
         centered_mse_loss(torch.zeros(2, 3), torch.zeros(2, 2))
+
+
+def _margin_reference(student: Tensor, teacher: Tensor) -> Tensor:
+    """Per-row m = r_0 - mean(r_1..r_{k-1}) with r = student - teacher."""
+    residuals = student - teacher
+    return residuals[:, 0] - residuals[:, 1:].mean(dim=1)
+
+
+def _scores(batch: int, k: int, seed: int) -> tuple[Tensor, Tensor]:
+    generator = torch.Generator().manual_seed(seed)
+    student = torch.randn(batch, k, generator=generator, dtype=torch.float64)
+    teacher = torch.randn(batch, k, generator=generator, dtype=torch.float64)
+    return student, teacher
+
+
+def test_margin_only_ignores_permutation_of_negatives() -> None:
+    student, teacher = _scores(5, 32, 7)
+    expected = margin_only_loss(student, teacher)
+    generator = torch.Generator().manual_seed(11)
+    for _ in range(3):
+        student_perm = student.clone()
+        teacher_perm = teacher.clone()
+        for row in range(student.shape[0]):
+            student_perm[row, 1:] = student[row, 1:][torch.randperm(31, generator=generator)]
+            teacher_perm[row, 1:] = teacher[row, 1:][torch.randperm(31, generator=generator)]
+        # permuting student and teacher negatives independently changes r_i, not mean(r_1..)
+        torch.testing.assert_close(margin_only_loss(student_perm, teacher), expected, atol=1e-12, rtol=0.0)
+        torch.testing.assert_close(margin_only_loss(student, teacher_perm), expected, atol=1e-12, rtol=0.0)
+        torch.testing.assert_close(margin_only_loss(student_perm, teacher_perm), expected, atol=1e-12, rtol=0.0)
+
+
+@pytest.mark.parametrize("candidate_count", [2, 4, 32])
+def test_margin_only_equals_squared_margin_and_scaled_centered_margin_part(candidate_count: int) -> None:
+    batch = 6
+    k = candidate_count
+    student, teacher = _scores(batch, k, 100 + k)
+    margins = _margin_reference(student, teacher)
+    loss = margin_only_loss(student, teacher)
+    torch.testing.assert_close(loss, margins.square().mean(), atol=1e-14, rtol=0.0)
+
+    residuals = student - teacher
+    negative_variance = residuals[:, 1:].var(dim=1, unbiased=False)
+    centered = centered_mse_loss(student, teacher)
+    # L_center = ((k-1)/k) * (V + m^2/k), averaged over rows
+    decomposed = ((k - 1) / k * (negative_variance + margins.square() / k)).mean()
+    torch.testing.assert_close(centered, decomposed, atol=1e-13, rtol=0.0)
+    margin_part = ((k - 1) / k * margins.square() / k).mean()
+    torch.testing.assert_close(loss, k**2 / (k - 1) * margin_part, atol=1e-13, rtol=0.0)
+
+
+def test_margin_only_gradient_is_identical_for_all_negatives() -> None:
+    k = 32
+    student, teacher = _scores(3, k, 5)
+    student.requires_grad_(True)
+    batch = student.shape[0]
+    margins = _margin_reference(student.detach(), teacher)
+    margin_only_loss(student, teacher).backward()
+    grad = student.grad
+    assert grad is not None
+    for row in range(batch):
+        negatives = grad[row, 1:]
+        torch.testing.assert_close(negatives, negatives[:1].expand_as(negatives), atol=1e-15, rtol=0.0)
+        torch.testing.assert_close(
+            negatives[0],
+            (-2.0 * margins[row] / (k - 1) / batch).to(negatives.dtype),
+            atol=1e-14,
+            rtol=0.0,
+        )
+        torch.testing.assert_close(grad[row, 0], 2.0 * margins[row] / batch, atol=1e-14, rtol=0.0)
+        assert abs(float(grad[row].sum())) < 1e-13
+
+
+def test_margin_only_handles_batches_as_row_mean() -> None:
+    student, teacher = _scores(4, 8, 3)
+    per_row = torch.stack([margin_only_loss(student[i : i + 1], teacher[i : i + 1]) for i in range(4)])
+    torch.testing.assert_close(margin_only_loss(student, teacher), per_row.mean(), atol=1e-14, rtol=0.0)
+    # a single-row batch is allowed and equals that row's squared margin
+    torch.testing.assert_close(per_row[0], _margin_reference(student[:1], teacher[:1]).square()[0])
+    # the loss is invariant to a per-row additive offset of the student scores
+    shifted = student + torch.tensor([[1.0], [-2.0], [0.5], [3.0]], dtype=student.dtype)
+    torch.testing.assert_close(margin_only_loss(shifted, teacher), margin_only_loss(student, teacher), atol=1e-12, rtol=0.0)
+
+
+def test_margin_only_single_candidate_is_differentiable_zero() -> None:
+    student = torch.ones(2, 1, requires_grad=True)
+    loss = margin_only_loss(student, torch.zeros(2, 1))
+    loss.backward()
+    assert float(loss) == 0.0
+    assert student.grad is not None
+
+
+def test_margin_only_rejects_mismatched_shapes() -> None:
+    with pytest.raises(ValueError, match="identical shapes"):
+        margin_only_loss(torch.zeros(2, 3), torch.zeros(2, 2))

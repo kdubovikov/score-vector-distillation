@@ -1,0 +1,6 @@
+schema_version: 1
+base_run: qwen_main.yaml
+name: qwen3_0p6b_c32_margin_only_seed42
+training:
+  loss: margin_only
+  seeds: [42]

@@ -62,6 +62,7 @@ def test_paper_run_loads_as_a_strict_typed_executable_config() -> None:
         "qwen_control_centered.yaml",
         "qwen_control_label_only.yaml",
         "qwen_control_margin.yaml",
+        "qwen_control_margin_only.yaml",
         "qwen_control_rank_weighted.yaml",
         "qwen_control_unit_centered.yaml",
         "qwen_main.yaml",

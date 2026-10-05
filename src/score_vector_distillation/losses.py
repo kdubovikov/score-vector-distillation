@@ -16,6 +16,7 @@ from torch.nn import functional
 __all__ = [
     "centered_mse_loss",
     "forward_kl_loss",
+    "margin_only_loss",
     "positive_negative_margin_mse_loss",
     "rank_weighted_pair_mse_loss",
     "unit_centered_mse_loss",
@@ -62,6 +63,27 @@ def centered_mse_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:
     residuals = student_scores - teacher_scores
     centered_residuals = residuals - residuals.mean(dim=1, keepdim=True)
     return centered_residuals.square().mean()
+
+
+def margin_only_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:
+    """Return the mean squared residual margin ``m**2``, with no negative-order term.
+
+    Candidate zero is the positive.  With residual ``r = student - teacher`` and
+    ``m = r[0] - mean(r[1:])``, this is ``mean(m ** 2)`` over rows.  Row-centered
+    MSE decomposes as ``((k - 1) / k) * (V + m**2 / k)``, with ``V`` the population
+    variance of the negative residuals; this loss keeps only the margin part (up to
+    a constant factor) and drops all negative-vs-negative structure.  Every negative
+    receives the same gradient, ``-2 m / (k - 1)`` per row, so the student is never
+    pushed to reorder its negatives.  A one-candidate row has no negatives and
+    returns a differentiable zero.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    if student_scores.shape[1] == 1:
+        return student_scores.sum() * 0.0
+
+    residuals = student_scores - teacher_scores
+    margins = residuals[:, 0] - residuals[:, 1:].mean(dim=1)
+    return margins.square().mean()
 
 
 def forward_kl_loss(
