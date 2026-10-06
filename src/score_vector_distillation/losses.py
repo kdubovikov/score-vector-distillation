@@ -17,6 +17,7 @@ __all__ = [
     "centered_mse_loss",
     "forward_kl_loss",
     "margin_only_loss",
+    "margin_only_scale_matched_loss",
     "positive_negative_margin_mse_loss",
     "rank_weighted_pair_mse_loss",
     "unit_centered_mse_loss",
@@ -84,6 +85,20 @@ def margin_only_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:
     residuals = student_scores - teacher_scores
     margins = residuals[:, 0] - residuals[:, 1:].mean(dim=1)
     return margins.square().mean()
+
+
+def margin_only_scale_matched_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:
+    """Return the margin term of the row-centered MSE, ``((k - 1) / k**2) * m**2``.
+
+    With ``k`` candidates per row, ``L_center = ((k - 1) / k) * (V + m**2 / k)``
+    (see :func:`margin_only_loss`).  This loss is exactly ``L_center`` with the
+    negatives' variance term ``((k - 1) / k) * V`` removed, so its margin gradient
+    has the same scale as in the centered loss; it equals
+    ``((k - 1) / k**2) * margin_only_loss``.
+    """
+    candidate_count = student_scores.shape[1]
+    scale = (candidate_count - 1) / candidate_count**2
+    return margin_only_loss(student_scores, teacher_scores) * scale
 
 
 def forward_kl_loss(

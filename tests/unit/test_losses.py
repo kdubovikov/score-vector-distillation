@@ -9,6 +9,7 @@ from torch import Tensor
 from score_vector_distillation.losses import (
     centered_mse_loss,
     margin_only_loss,
+    margin_only_scale_matched_loss,
     positive_negative_margin_mse_loss,
     rank_weighted_pair_mse_loss,
     unit_centered_mse_loss,
@@ -205,3 +206,44 @@ def test_margin_only_single_candidate_is_differentiable_zero() -> None:
 def test_margin_only_rejects_mismatched_shapes() -> None:
     with pytest.raises(ValueError, match="identical shapes"):
         margin_only_loss(torch.zeros(2, 3), torch.zeros(2, 2))
+
+
+@pytest.mark.parametrize("candidate_count", [2, 4, 32])
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_margin_only_scale_matched_is_centered_loss_without_negative_variance(candidate_count: int, seed: int) -> None:
+    k = candidate_count
+    student, teacher = _scores(8, k, 1000 * seed + k)
+    residuals = student - teacher
+    negative_variance = residuals[:, 1:].var(dim=1, unbiased=False)
+    # L_center - ((k-1)/k) * V, averaged over rows, is exactly the margin term ((k-1)/k^2) * m^2
+    expected = centered_mse_loss(student, teacher) - ((k - 1) / k * negative_variance).mean()
+    loss = margin_only_scale_matched_loss(student, teacher)
+    torch.testing.assert_close(loss, expected, atol=1e-13, rtol=0.0)
+    margins = _margin_reference(student, teacher)
+    torch.testing.assert_close(loss, ((k - 1) / k**2 * margins.square()).mean(), atol=1e-14, rtol=0.0)
+    torch.testing.assert_close(loss, (k - 1) / k**2 * margin_only_loss(student, teacher), atol=1e-14, rtol=0.0)
+
+
+def test_margin_only_scale_matched_gradient_matches_centered_margin_gradient() -> None:
+    k = 32
+    student, teacher = _scores(3, k, 9)
+    scaled_student = student.clone().requires_grad_(True)
+    margin_only_scale_matched_loss(scaled_student, teacher).backward()
+    # the centered loss gradient minus the gradient of its ((k-1)/k) V term
+    centered_student = student.clone().requires_grad_(True)
+    residuals = centered_student - teacher
+    variance_term = ((k - 1) / k * residuals[:, 1:].var(dim=1, unbiased=False)).mean()
+    (centered_mse_loss(centered_student, teacher) - variance_term).backward()
+    assert scaled_student.grad is not None and centered_student.grad is not None
+    torch.testing.assert_close(scaled_student.grad, centered_student.grad, atol=1e-14, rtol=0.0)
+    negatives = scaled_student.grad[:, 1:]
+    torch.testing.assert_close(negatives, negatives[:, :1].expand_as(negatives), atol=1e-15, rtol=0.0)
+
+
+def test_margin_only_scale_matched_single_candidate_and_shape_checks() -> None:
+    student = torch.ones(2, 1, requires_grad=True)
+    loss = margin_only_scale_matched_loss(student, torch.zeros(2, 1))
+    loss.backward()
+    assert float(loss) == 0.0
+    with pytest.raises(ValueError, match="identical shapes"):
+        margin_only_scale_matched_loss(torch.zeros(2, 3), torch.zeros(2, 2))

@@ -13,6 +13,7 @@ from score_vector_distillation.losses import (
     centered_mse_loss,
     forward_kl_loss,
     margin_only_loss,
+    margin_only_scale_matched_loss,
     positive_negative_margin_mse_loss,
     rank_weighted_pair_mse_loss,
     unit_centered_mse_loss,
@@ -36,6 +37,7 @@ _DISTILLATION_LOSSES: dict[DistillationLoss, Callable[[Tensor, Tensor], Tensor]]
     DistillationLoss.POSITIVE_NEGATIVE_MARGIN_MSE: positive_negative_margin_mse_loss,
     DistillationLoss.UNIT_CENTERED_MSE: unit_centered_mse_loss,
     DistillationLoss.MARGIN_ONLY: margin_only_loss,
+    DistillationLoss.MARGIN_ONLY_SCALE_MATCHED: margin_only_scale_matched_loss,
     DistillationLoss.RANK_WEIGHTED_PAIR_MSE: rank_weighted_pair_mse_loss,
     DistillationLoss.LABEL_ONLY_CROSS_ENTROPY: _label_only_cross_entropy,
 }

@@ -34,6 +34,7 @@ class DistillationLoss(StrEnum):
     POSITIVE_NEGATIVE_MARGIN_MSE = "positive_negative_margin_mse"
     UNIT_CENTERED_MSE = "unit_centered_mse"
     MARGIN_ONLY = "margin_only"
+    MARGIN_ONLY_SCALE_MATCHED = "margin_only_scale_matched"
     RANK_WEIGHTED_PAIR_MSE = "rank_weighted_pair_mse"
     LABEL_ONLY_CROSS_ENTROPY = "label_only_cross_entropy"
     LABEL_ONLY_INBATCH_CROSS_ENTROPY = "label_only_inbatch_cross_entropy"
