@@ -139,3 +139,57 @@ def test_float32_scores_are_compared_with_the_float64_threshold() -> None:
     )
     assert mined.document_ids == ("y", "z")
     assert mined.dropped_above_threshold == 1
+
+
+def test_short_rows_raise_unless_relaxation_is_allowed() -> None:
+    # positive ranked last: only one document lies at or below 0.95 * 0.2 = 0.19
+    ids = ["p", "a", "b", "c", "d", "e"]
+    scores = np.array([0.20, 0.90, 0.50, 0.30, 0.25, 0.10], dtype=np.float32)
+    with pytest.raises(MiningError):
+        mine_negatives(scores, ids, positive_id="p", judged_relevant_ids={"p", "c"}, negative_count=3)
+    mined = mine_negatives(
+        scores, ids, positive_id="p", judged_relevant_ids={"p", "c"}, negative_count=3, relax_threshold_if_short=True
+    )
+    # e (0.10) is below the threshold; the two lowest non-judged documents above it are d (0.25) and b (0.50);
+    # a (0.90) and the judged c are never used
+    assert mined.document_ids == ("b", "d", "e")
+    assert mined.relaxed_fill == 2
+    assert mined.dropped_above_threshold == 1  # a
+    assert sum(score > mined.threshold for score in mined.scores) == mined.relaxed_fill
+
+
+def test_relaxation_is_a_no_op_for_rows_with_enough_eligible_documents() -> None:
+    rng = np.random.default_rng(1)
+    for _ in range(50):
+        n = 80
+        ids = [f"d{i}" for i in range(n)]
+        scores = np.round(rng.uniform(0.0, 1.0, size=n), 2).astype(np.float32)
+        positive = ids[int(np.argmax(scores))]
+        plain = mine_negatives(scores, ids, positive_id=positive, judged_relevant_ids={positive}, negative_count=10)
+        relaxed = mine_negatives(
+            scores,
+            ids,
+            positive_id=positive,
+            judged_relevant_ids={positive},
+            negative_count=10,
+            relax_threshold_if_short=True,
+        )
+        assert plain == relaxed and relaxed.relaxed_fill == 0
+
+
+def test_relaxation_breaks_ties_by_document_id_and_fails_without_enough_documents() -> None:
+    ids = ["p", "z", "m", "a"]
+    scores = np.array([0.1, 0.5, 0.5, 0.5], dtype=np.float32)
+    mined = mine_negatives(
+        scores, ids, positive_id="p", judged_relevant_ids={"p"}, negative_count=2, relax_threshold_if_short=True
+    )
+    assert mined.document_ids == ("a", "m") and mined.relaxed_fill == 2 and mined.dropped_above_threshold == 1
+    with pytest.raises(MiningError):
+        mine_negatives(
+            scores,
+            ids,
+            positive_id="p",
+            judged_relevant_ids={"p", "z"},
+            negative_count=3,
+            relax_threshold_if_short=True,
+        )

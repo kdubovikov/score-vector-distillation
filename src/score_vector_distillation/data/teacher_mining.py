@@ -13,6 +13,14 @@ selection does not depend on corpus order or on NumPy's partition order.
 The threshold is written as ``s_pos - (1 - p) * |s_pos|``, which equals
 ``p * s_pos`` for the usual positive cosine and stays below the positive's
 score if a positive's cosine is ever negative.
+
+When the teacher ranks the labelled positive near the bottom of a small corpus,
+fewer than ``negative_count`` non-judged documents may lie at or below the
+threshold.  With ``relax_threshold_if_short=True`` the rule is relaxed only as
+far as needed: every document at or below the threshold is kept and the row is
+completed with the non-judged documents of *lowest* teacher score above the
+threshold (the ones least likely to be false negatives).  Without it such a row
+raises :class:`MiningError`.
 """
 
 from __future__ import annotations
@@ -46,6 +54,9 @@ class MinedNegatives:
     negative, so this is exactly the number of candidates the percentage rule
     removed from the top of the ranking.  ``judged_above_last`` counts the
     judged-relevant documents the teacher ranks above the last kept negative.
+    ``relaxed_fill`` is the number of negatives taken from above the threshold
+    because too few documents lay below it (0 unless the relaxation was used;
+    those documents are not counted in ``dropped_above_threshold``).
     """
 
     document_ids: tuple[str, ...]
@@ -54,6 +65,7 @@ class MinedNegatives:
     threshold: float
     dropped_above_threshold: int
     judged_above_last: int
+    relaxed_fill: int = 0
 
 
 def positive_aware_threshold(positive_score: float, *, max_relative_score: float = 0.95) -> float:
@@ -89,6 +101,7 @@ def mine_negatives(
     max_relative_score: float = 0.95,
     id_ranks: npt.NDArray[np.int64] | None = None,
     index: Mapping[str, int] | None = None,
+    relax_threshold_if_short: bool = False,
 ) -> MinedNegatives:
     """Select ``negative_count`` positive-aware hard negatives for one query.
 
@@ -96,7 +109,8 @@ def mine_negatives(
     ``document_ids``.  ``positive_id`` is the row's labelled positive (its score
     sets the threshold) and must be one of ``judged_relevant_ids``, all of which
     are excluded from the negatives.  ``id_ranks`` and ``index`` may be passed
-    to avoid recomputing them for every query of one corpus.
+    to avoid recomputing them for every query of one corpus.  Negatives are
+    returned in ranking order (descending score, ascending document ID).
     """
 
     raw = np.asarray(scores)
@@ -127,8 +141,16 @@ def mine_negatives(
             judged[position] = True
     above = (values > threshold) & ~judged
     eligible = np.flatnonzero(~judged & ~above)
+    relaxed_fill = 0
     if eligible.size < negative_count:
-        raise MiningError(f"only {eligible.size} eligible documents for {negative_count} negatives.")
+        if not relax_threshold_if_short:
+            raise MiningError(f"only {eligible.size} eligible documents for {negative_count} negatives.")
+        relaxed_fill = negative_count - eligible.size
+        over = np.flatnonzero(above)
+        if over.size < relaxed_fill:
+            raise MiningError(f"only {eligible.size + over.size} non-judged documents for {negative_count} negatives.")
+        lowest = over[np.lexsort((ranks[over], values[over]))[:relaxed_fill]]  # lowest scores above the threshold
+        eligible = np.concatenate((eligible, lowest))
 
     eligible_scores = values[eligible]
     if eligible.size > negative_count:
@@ -147,6 +169,7 @@ def mine_negatives(
         scores=tuple(float(values[i]) for i in selected),
         positive_score=positive_score,
         threshold=threshold,
-        dropped_above_threshold=int(above.sum()),
+        dropped_above_threshold=int(above.sum()) - relaxed_fill,
         judged_above_last=judged_above_last,
+        relaxed_fill=relaxed_fill,
     )
