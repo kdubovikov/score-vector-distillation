@@ -50,7 +50,7 @@ from score_vector_distillation.training.dataset import (
     DistillationDataset,
     collate_distillation_rows,
 )
-from score_vector_distillation.training.model import ScoreVectorStudent
+from score_vector_distillation.training.model import SCORE_LOG_SCALE_PARAMETER, ScoreVectorStudent
 
 if TYPE_CHECKING:
     from accelerate import Accelerator
@@ -288,6 +288,7 @@ def _validate_candidate_rows(
     document_chunk_size: int,
     loss_kind: DistillationLoss,
     loss_temperature: float | None = None,
+    teacher_temperature: float | None = None,
 ) -> dict[str, float | int]:
     """Measure held-out distillation loss, not full-corpus retrieval quality."""
 
@@ -305,6 +306,7 @@ def _validate_candidate_rows(
             loss=loss_kind,
             candidate_ids=batch.get("candidate_ids"),
             loss_temperature=loss_temperature,
+            teacher_temperature=teacher_temperature,
             # This loop runs unsharded on the main process only (see the
             # module docstring above); calling a distributed collective here
             # would hang waiting on ranks that never reach it.
@@ -402,16 +404,35 @@ def _build_training_components(
         lora=_lora_settings(training.lora),
         gradient_checkpointing=training.backbone_gradient_checkpointing,
     )
-    student = ScoreVectorStudent(backbone)
+    learned_scale = training.loss is DistillationLoss.SCALE_MATCHED_CENTERED_MSE
+    student = ScoreVectorStudent(backbone, learned_score_scale=learned_scale)
     trainable = [parameter for parameter in student.parameters() if parameter.requires_grad]
     for parameter in trainable:
         if parameter.dtype != torch.float32:
             parameter.data = parameter.data.float()
-    optimizer = AdamW(
-        trainable,
-        lr=training.learning_rate,
-        weight_decay=training.weight_decay,
-    )
+    if learned_scale:
+        # The learned global score scale gets its own parameter group: its own learning
+        # rate (the LoRA rate would barely move it in one epoch), no weight decay, and the
+        # same warmup-plus-cosine multiplier through the shared LambdaLR.
+        scale_parameter = student.learned_score_scale
+        assert scale_parameter is not None
+        backbone_trainable = [parameter for parameter in trainable if parameter is not scale_parameter]
+        assert len(backbone_trainable) == len(trainable) - 1
+        parameter_groups: list[dict[str, Any]] = [
+            {"params": backbone_trainable},
+            {"params": [scale_parameter], "lr": training.score_scale_learning_rate, "weight_decay": 0.0},
+        ]
+        optimizer = AdamW(
+            parameter_groups,
+            lr=training.learning_rate,
+            weight_decay=training.weight_decay,
+        )
+    else:
+        optimizer = AdamW(
+            trainable,
+            lr=training.learning_rate,
+            weight_decay=training.weight_decay,
+        )
     train_loader: DataLoader[Any] = DataLoader(
         prepared.train_dataset,
         batch_size=training.per_device_batch_size,
@@ -519,6 +540,7 @@ def _validate_and_checkpoint_epoch(
             document_chunk_size=prepared.document_chunk_size,
             loss_kind=prepared.run.training.loss,
             loss_temperature=prepared.run.training.loss_temperature,
+            teacher_temperature=getattr(prepared.run.training, "teacher_temperature", None),
         )
         _append_metric(
             metrics_path,
@@ -572,6 +594,21 @@ def _validate_and_checkpoint_epoch(
     )
 
 
+def _learned_scale_parameter(student: torch.nn.Module) -> torch.nn.Parameter | None:
+    """Return the learned global score log-scale of a (possibly wrapped) student, if any."""
+
+    for name, parameter in student.named_parameters():
+        if name == SCORE_LOG_SCALE_PARAMETER or name.endswith(f".{SCORE_LOG_SCALE_PARAMETER}"):
+            return parameter
+    return None
+
+
+def _json_float(value: float) -> float | None:
+    """Return a JSON-safe float (``None`` for a non-finite value)."""
+
+    return value if math.isfinite(value) else None
+
+
 def _run_training_epochs(
     request: TrainingRequest,
     prepared: PreparedTrainingRun,
@@ -586,6 +623,17 @@ def _run_training_epochs(
     start_epoch, global_step = _resume_position(request, prepared, accelerator)
     metrics_path = output_dir / "metrics.jsonl"
     started = time.time()
+    scale_parameter = _learned_scale_parameter(components.student)
+    # With a learned global score scale the gradient-norm clip covers the backbone (LoRA)
+    # parameters only, so they are clipped by the same rule as without the scale; every
+    # other loss clips exactly the parameter iterable it always did.
+    clip_parameters = (
+        None
+        if scale_parameter is None
+        else [parameter for parameter in components.student.parameters() if parameter is not scale_parameter]
+    )
+    gradient_norm_pre_clip = float("nan")
+    score_log_scale_grad = float("nan")
 
     for epoch in range(start_epoch, training.epochs + 1):
         components.student.train()
@@ -606,26 +654,45 @@ def _run_training_epochs(
                     loss=training.loss,
                     candidate_ids=batch.get("candidate_ids"),
                     loss_temperature=training.loss_temperature,
+                    teacher_temperature=training.teacher_temperature,
                 )
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(components.student.parameters(), training.max_gradient_norm)
+                    if scale_parameter is not None:
+                        scale_gradient = scale_parameter.grad
+                        score_log_scale_grad = (
+                            float("nan") if scale_gradient is None else float(scale_gradient.detach().cpu())
+                        )
+                    # Logging only: clip_grad_norm_ already returns the total gradient norm
+                    # before clipping; recording it does not change the update.
+                    gradient_norm = accelerator.clip_grad_norm_(
+                        components.student.parameters() if clip_parameters is None else clip_parameters,
+                        training.max_gradient_norm,
+                    )
+                    gradient_norm_pre_clip = (
+                        float(gradient_norm.detach().cpu()) if isinstance(gradient_norm, Tensor) else float("nan")
+                    )
                 components.optimizer.step()
                 components.scheduler.step()
                 components.optimizer.zero_grad(set_to_none=True)
             if accelerator.sync_gradients:
                 global_step += 1
                 if accelerator.is_main_process:
-                    _append_metric(
-                        metrics_path,
-                        {
-                            "event": "train",
-                            "epoch": epoch,
-                            "step": global_step,
-                            "loss": float(loss.detach().cpu()),
-                            "learning_rate": float(components.scheduler.get_last_lr()[0]),
-                        },
-                    )
+                    record: dict[str, Any] = {
+                        "event": "train",
+                        "epoch": epoch,
+                        "step": global_step,
+                        "loss": float(loss.detach().cpu()),
+                        "learning_rate": float(components.scheduler.get_last_lr()[0]),
+                        "grad_norm_pre_clip": _json_float(gradient_norm_pre_clip),
+                        "grad_clipped": bool(gradient_norm_pre_clip > training.max_gradient_norm),
+                    }
+                    if scale_parameter is not None:
+                        record["score_log_scale"] = float(scale_parameter.detach().cpu())
+                        record["score_scale"] = math.exp(record["score_log_scale"])
+                        record["score_log_scale_grad"] = _json_float(score_log_scale_grad)
+                        record["score_scale_learning_rate"] = float(components.scheduler.get_last_lr()[1])
+                    _append_metric(metrics_path, record)
         _validate_and_checkpoint_epoch(
             prepared,
             components,
@@ -636,6 +703,16 @@ def _run_training_epochs(
             global_step=global_step,
         )
     return global_step, time.time() - started
+
+
+def _score_scale_summary(student: ScoreVectorStudent) -> dict[str, float]:
+    """Return the final learned global score scale (empty without one); it is not saved in the adapter."""
+
+    parameter = getattr(student, "learned_score_scale", None)
+    if not isinstance(parameter, torch.nn.Parameter):
+        return {}
+    log_scale = float(parameter.detach().cpu())
+    return {"final_score_log_scale": log_scale, "final_score_scale": math.exp(log_scale)}
 
 
 def _write_final_artifacts(
@@ -683,6 +760,7 @@ def _write_final_artifacts(
                     "global_steps": global_step,
                     "elapsed_seconds": elapsed_seconds,
                     "world_size": accelerator.num_processes,
+                    **_score_scale_summary(final_model),
                 },
             },
         )
@@ -694,6 +772,7 @@ def _write_final_artifacts(
                 "world_size": accelerator.num_processes,
                 "document_chunk_size": prepared.document_chunk_size,
                 "checkpoint": "model_final",
+                **_score_scale_summary(final_model),
             }
         )
         _write_json_atomic(output_dir / "summary.json", summary)

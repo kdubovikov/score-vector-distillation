@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Self, TypeVar
+from typing import Any, Self, TypeVar, cast
 
 import yaml
 
@@ -38,6 +38,8 @@ class DistillationLoss(StrEnum):
     RANK_WEIGHTED_PAIR_MSE = "rank_weighted_pair_mse"
     LABEL_ONLY_CROSS_ENTROPY = "label_only_cross_entropy"
     LABEL_ONLY_INBATCH_CROSS_ENTROPY = "label_only_inbatch_cross_entropy"
+    SCALE_MATCHED_CENTERED_MSE = "scale_matched_centered_mse"
+    FORWARD_KL_TEACHER_TEMPERATURE = "forward_kl_teacher_temperature"
 
 
 class SchedulerKind(StrEnum):
@@ -285,6 +287,8 @@ class TrainingConfig:
     candidate_checkpointing: CandidateCheckpointingConfig
     eval_batch_size: int = 1
     loss_temperature: float | None = None
+    teacher_temperature: float | None = None
+    score_scale_learning_rate: float | None = None
 
     @classmethod
     def from_mapping(cls, value: object, *, context: str = "training") -> Self:
@@ -314,7 +318,9 @@ class TrainingConfig:
             values,
             context=context,
             required=required,
-            optional=frozenset({"eval_batch_size", "loss_temperature"}),
+            optional=frozenset(
+                {"eval_batch_size", "loss_temperature", "teacher_temperature", "score_scale_learning_rate"}
+            ),
         )
         raw_seeds = values["seeds"]
         if not isinstance(raw_seeds, list) or not raw_seeds:
@@ -390,18 +396,48 @@ class TrainingConfig:
                     maximum_inclusive=False,
                 )
             ),
+            teacher_temperature=(
+                None
+                if values.get("teacher_temperature") is None
+                else _number(
+                    values["teacher_temperature"],
+                    context=f"{context}.teacher_temperature",
+                    minimum=0.0,
+                    maximum_inclusive=False,
+                )
+            ),
+            score_scale_learning_rate=(
+                None
+                if values.get("score_scale_learning_rate") is None
+                else _number(
+                    values["score_scale_learning_rate"],
+                    context=f"{context}.score_scale_learning_rate",
+                    minimum=0.0,
+                    maximum_inclusive=False,
+                )
+            ),
         )
         raw_loss = values["loss"]
-        if raw_loss == DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY and settings.loss_temperature is None:
+        temperature_losses = (
+            DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY,
+            DistillationLoss.FORWARD_KL_TEACHER_TEMPERATURE,
+        )
+        if raw_loss in temperature_losses and settings.loss_temperature is None:
+            raise ConfigError(f"{context}.loss_temperature is required when {context}.loss={raw_loss!r}.")
+        if raw_loss not in temperature_losses and settings.loss_temperature is not None:
             raise ConfigError(
-                f"{context}.loss_temperature is required when {context}.loss="
-                f"{DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY.value!r}."
+                f"{context}.loss_temperature is only supported when {context}.loss is one of "
+                f"{sorted(loss.value for loss in temperature_losses)!r}."
             )
-        if raw_loss != DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY and settings.loss_temperature is not None:
-            raise ConfigError(
-                f"{context}.loss_temperature is only supported when {context}.loss="
-                f"{DistillationLoss.LABEL_ONLY_INBATCH_CROSS_ENTROPY.value!r}."
-            )
+        for key, owner in (
+            ("teacher_temperature", DistillationLoss.FORWARD_KL_TEACHER_TEMPERATURE),
+            ("score_scale_learning_rate", DistillationLoss.SCALE_MATCHED_CENTERED_MSE),
+        ):
+            present = getattr(settings, key) is not None
+            if raw_loss == owner and not present:
+                raise ConfigError(f"{context}.{key} is required when {context}.loss={owner.value!r}.")
+            if raw_loss != owner and present:
+                raise ConfigError(f"{context}.{key} is only supported when {context}.loss={owner.value!r}.")
         expected_batch = (
             settings.per_device_batch_size * settings.gradient_accumulation_steps * settings.reference_world_size
         )
@@ -412,6 +448,13 @@ class TrainingConfig:
             )
         if settings.learning_rate <= 0.0:
             raise ConfigError(f"{context}.learning_rate must be positive.")
+        positive_keys = ["teacher_temperature", "score_scale_learning_rate"]
+        if raw_loss == DistillationLoss.FORWARD_KL_TEACHER_TEMPERATURE:
+            positive_keys.append("loss_temperature")
+        for key in positive_keys:
+            setting = cast(float | None, getattr(settings, key))
+            if setting is not None and setting <= 0.0:
+                raise ConfigError(f"{context}.{key} must be positive.")
         if settings.max_gradient_norm <= 0.0:
             raise ConfigError(f"{context}.max_gradient_norm must be positive.")
         return settings

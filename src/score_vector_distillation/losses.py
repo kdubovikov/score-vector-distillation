@@ -16,10 +16,12 @@ from torch.nn import functional
 __all__ = [
     "centered_mse_loss",
     "forward_kl_loss",
+    "forward_kl_teacher_temperature_loss",
     "margin_only_loss",
     "margin_only_scale_matched_loss",
     "positive_negative_margin_mse_loss",
     "rank_weighted_pair_mse_loss",
+    "scale_matched_centered_mse_loss",
     "unit_centered_mse_loss",
 ]
 
@@ -120,6 +122,54 @@ def forward_kl_loss(
     student_log_probs = functional.log_softmax(student_scores / temperature, dim=-1)
     teacher_probs = functional.softmax(teacher_scores.detach() / temperature, dim=-1)
     return temperature**2 * functional.kl_div(student_log_probs, teacher_probs, reduction="batchmean")
+
+
+def forward_kl_teacher_temperature_loss(
+    student_scores: Tensor,
+    teacher_scores: Tensor,
+    *,
+    student_temperature: float,
+    teacher_temperature: float,
+) -> Tensor:
+    """Return forward KL with separate student and teacher temperatures.
+
+    ``student_temperature**2 * KL(softmax(t / teacher_temperature) || softmax(s / student_temperature))``,
+    summed over candidates and averaged over rows; teacher targets are detached.  The loss is
+    zero exactly when ``s = (student_temperature / teacher_temperature) * t + c`` for some row
+    offset ``c``, so the teacher temperature sets the score scale the student must reach.  With
+    equal temperatures the computation is the same as :func:`forward_kl_loss`.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    for name, value in (("student_temperature", student_temperature), ("teacher_temperature", teacher_temperature)):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive.")
+    student_log_probs = functional.log_softmax(student_scores / student_temperature, dim=-1)
+    teacher_probs = functional.softmax(teacher_scores.detach() / teacher_temperature, dim=-1)
+    return student_temperature**2 * functional.kl_div(student_log_probs, teacher_probs, reduction="batchmean")
+
+
+def scale_matched_centered_mse_loss(
+    student_scores: Tensor,
+    teacher_scores: Tensor,
+    *,
+    log_scale: Tensor,
+) -> Tensor:
+    """Return row-centered MSE after one learned global positive scale on the student.
+
+    ``centered_mse_loss(exp(log_scale) * student_scores, teacher_scores)``: ``log_scale`` is a
+    single scalar shared by every row (a trainable parameter of the student wrapper), so the
+    student can match the teacher's score spread without shrinking its own similarity scale.
+    At ``log_scale == 0`` the scale is exactly one and the loss, and its gradient with respect
+    to the student scores, equal :func:`centered_mse_loss`.  The scale is a training device
+    only: a global positive scale does not change any ranking, and it is not applied at
+    inference.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    if log_scale.ndim != 0 or not log_scale.is_floating_point():
+        raise ValueError(f"log_scale must be a floating-point scalar tensor; got shape {tuple(log_scale.shape)}.")
+    if log_scale.device != student_scores.device:
+        raise ValueError(f"log_scale must be on {student_scores.device}; got {log_scale.device}.")
+    return centered_mse_loss(student_scores * log_scale.exp().to(dtype=student_scores.dtype), teacher_scores)
 
 
 def positive_negative_margin_mse_loss(student_scores: Tensor, teacher_scores: Tensor) -> Tensor:
