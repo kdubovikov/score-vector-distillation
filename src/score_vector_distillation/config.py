@@ -40,6 +40,7 @@ class DistillationLoss(StrEnum):
     LABEL_ONLY_INBATCH_CROSS_ENTROPY = "label_only_inbatch_cross_entropy"
     SCALE_MATCHED_CENTERED_MSE = "scale_matched_centered_mse"
     FORWARD_KL_TEACHER_TEMPERATURE = "forward_kl_teacher_temperature"
+    WEIGHTED_UNIT_CENTERED_MSE = "weighted_unit_centered_mse"
 
 
 class SchedulerKind(StrEnum):
@@ -265,6 +266,38 @@ class CandidateCheckpointingConfig:
 
 
 @dataclass(frozen=True)
+class RowWeightConfig:
+    """Fixed per-row weights of :data:`DistillationLoss.WEIGHTED_UNIT_CENTERED_MSE`.
+
+    ``w_r = (||P s_r|| / student_scale) ** student_exponent * (||P t_r|| / teacher_scale) ** teacher_exponent``,
+    with ``P`` the row-centering projection; the weights are detached from the graph.  The scales are
+    fixed constants (not batch statistics), so a row's weight does not depend on the other rows of its
+    micro-batch or on the device topology.
+    """
+
+    student_exponent: float
+    teacher_exponent: float
+    student_scale: float
+    teacher_scale: float
+
+    @classmethod
+    def from_mapping(cls, value: object, *, context: str = "training.row_weighting") -> Self:
+        values = _mapping(value, context=context)
+        keys = frozenset({"student_exponent", "teacher_exponent", "student_scale", "teacher_scale"})
+        _validate_keys(values, context=context, required=keys, optional=frozenset())
+        settings = cls(
+            student_exponent=_number(values["student_exponent"], context=f"{context}.student_exponent", minimum=0.0),
+            teacher_exponent=_number(values["teacher_exponent"], context=f"{context}.teacher_exponent", minimum=0.0),
+            student_scale=_number(values["student_scale"], context=f"{context}.student_scale", minimum=0.0),
+            teacher_scale=_number(values["teacher_scale"], context=f"{context}.teacher_scale", minimum=0.0),
+        )
+        for key in ("student_scale", "teacher_scale"):
+            if getattr(settings, key) <= 0.0:
+                raise ConfigError(f"{context}.{key} must be positive.")
+        return settings
+
+
+@dataclass(frozen=True)
 class TrainingConfig:
     """Complete executable optimizer and batching protocol for one run."""
 
@@ -289,6 +322,7 @@ class TrainingConfig:
     loss_temperature: float | None = None
     teacher_temperature: float | None = None
     score_scale_learning_rate: float | None = None
+    row_weighting: RowWeightConfig | None = None
 
     @classmethod
     def from_mapping(cls, value: object, *, context: str = "training") -> Self:
@@ -319,7 +353,13 @@ class TrainingConfig:
             context=context,
             required=required,
             optional=frozenset(
-                {"eval_batch_size", "loss_temperature", "teacher_temperature", "score_scale_learning_rate"}
+                {
+                    "eval_batch_size",
+                    "loss_temperature",
+                    "teacher_temperature",
+                    "score_scale_learning_rate",
+                    "row_weighting",
+                }
             ),
         )
         raw_seeds = values["seeds"]
@@ -416,6 +456,11 @@ class TrainingConfig:
                     maximum_inclusive=False,
                 )
             ),
+            row_weighting=(
+                None
+                if values.get("row_weighting") is None
+                else RowWeightConfig.from_mapping(values["row_weighting"], context=f"{context}.row_weighting")
+            ),
         )
         raw_loss = values["loss"]
         temperature_losses = (
@@ -432,6 +477,7 @@ class TrainingConfig:
         for key, owner in (
             ("teacher_temperature", DistillationLoss.FORWARD_KL_TEACHER_TEMPERATURE),
             ("score_scale_learning_rate", DistillationLoss.SCALE_MATCHED_CENTERED_MSE),
+            ("row_weighting", DistillationLoss.WEIGHTED_UNIT_CENTERED_MSE),
         ):
             present = getattr(settings, key) is not None
             if raw_loss == owner and not present:

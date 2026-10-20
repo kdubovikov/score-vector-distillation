@@ -8,7 +8,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional
 
-from score_vector_distillation.config import DistillationLoss
+from score_vector_distillation.config import DistillationLoss, RowWeightConfig
 from score_vector_distillation.losses import (
     centered_mse_loss,
     forward_kl_loss,
@@ -19,6 +19,7 @@ from score_vector_distillation.losses import (
     rank_weighted_pair_mse_loss,
     scale_matched_centered_mse_loss,
     unit_centered_mse_loss,
+    weighted_unit_centered_mse_loss,
 )
 from score_vector_distillation.models.sentence_transformer import SentenceTransformerBackbone
 from score_vector_distillation.training.checkpointed import (
@@ -50,7 +51,8 @@ _DISTILLATION_LOSSES: dict[DistillationLoss, Callable[[Tensor, Tensor], Tensor]]
 # uniform Callable[[student_scores, teacher_scores], Tensor] contract above.
 # DistillationLoss.SCALE_MATCHED_CENTERED_MSE (learned global score scale) and
 # DistillationLoss.FORWARD_KL_TEACHER_TEMPERATURE (configured temperatures) are
-# also dispatched in ScoreVectorStudent.forward, after row scoring.
+# also dispatched in ScoreVectorStudent.forward, after row scoring, and so is
+# DistillationLoss.WEIGHTED_UNIT_CENTERED_MSE (configured fixed row weights).
 
 SCORE_LOG_SCALE_PARAMETER = "score_log_scale"
 
@@ -86,6 +88,7 @@ class ScoreVectorStudent(nn.Module):
         loss_temperature: float | None = None,
         teacher_temperature: float | None = None,
         gather_across_processes: bool = True,
+        row_weighting: RowWeightConfig | None = None,
     ) -> tuple[Tensor, Tensor]:
         """Score one candidate row and apply the selected typed objective."""
 
@@ -143,6 +146,20 @@ class ScoreVectorStudent(nn.Module):
                     teacher,
                     student_temperature=loss_temperature,
                     teacher_temperature=teacher_temperature,
+                ),
+                scores,
+            )
+        if loss is DistillationLoss.WEIGHTED_UNIT_CENTERED_MSE:
+            if row_weighting is None:
+                raise ValueError("row_weighting is required for DistillationLoss.WEIGHTED_UNIT_CENTERED_MSE.")
+            return (
+                weighted_unit_centered_mse_loss(
+                    student,
+                    teacher,
+                    student_exponent=row_weighting.student_exponent,
+                    teacher_exponent=row_weighting.teacher_exponent,
+                    student_scale=row_weighting.student_scale,
+                    teacher_scale=row_weighting.teacher_scale,
                 ),
                 scores,
             )

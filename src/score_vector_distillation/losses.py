@@ -19,10 +19,12 @@ __all__ = [
     "forward_kl_teacher_temperature_loss",
     "margin_only_loss",
     "margin_only_scale_matched_loss",
+    "pearson_row_weights",
     "positive_negative_margin_mse_loss",
     "rank_weighted_pair_mse_loss",
     "scale_matched_centered_mse_loss",
     "unit_centered_mse_loss",
+    "weighted_unit_centered_mse_loss",
 ]
 
 
@@ -203,6 +205,98 @@ def unit_centered_mse_loss(
     unit_student = functional.normalize(centered_student, p=2.0, dim=1, eps=eps)
     unit_teacher = functional.normalize(centered_teacher, p=2.0, dim=1, eps=eps)
     return functional.mse_loss(unit_student, unit_teacher)
+
+
+def _validate_row_weighting(
+    *,
+    student_exponent: float,
+    teacher_exponent: float,
+    student_scale: float,
+    teacher_scale: float,
+) -> None:
+    for name, value in (("student_exponent", student_exponent), ("teacher_exponent", teacher_exponent)):
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be finite and non-negative; got {value}.")
+    for name, value in (("student_scale", student_scale), ("teacher_scale", teacher_scale)):
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{name} must be finite and positive; got {value}.")
+
+
+def pearson_row_weights(
+    student_scores: Tensor,
+    teacher_scores: Tensor,
+    *,
+    student_exponent: float,
+    teacher_exponent: float,
+    student_scale: float,
+    teacher_scale: float,
+) -> Tensor:
+    """Return detached per-row weights ``(||P s|| / c_s)**a * (||P t|| / c_t)**b``.
+
+    ``P`` removes each row's mean, so ``||P s||`` and ``||P t||`` are the rows' centered
+    score norms (``sqrt(k)`` times the population standard deviation).  The scales
+    ``c_s`` and ``c_t`` are fixed constants, never batch statistics.  The result is a
+    ``[batch]`` tensor without autograd history: no gradient flows through the weights.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    _validate_row_weighting(
+        student_exponent=student_exponent,
+        teacher_exponent=teacher_exponent,
+        student_scale=student_scale,
+        teacher_scale=teacher_scale,
+    )
+    with torch.no_grad():
+        student = student_scores.detach()
+        teacher = teacher_scores.detach().to(dtype=student.dtype)
+        student_norms = torch.linalg.vector_norm(student - student.mean(dim=1, keepdim=True), dim=1)
+        teacher_norms = torch.linalg.vector_norm(teacher - teacher.mean(dim=1, keepdim=True), dim=1)
+        weights: Tensor = (student_norms / student_scale).pow(student_exponent) * (teacher_norms / teacher_scale).pow(
+            teacher_exponent
+        )
+    return weights
+
+
+def weighted_unit_centered_mse_loss(
+    student_scores: Tensor,
+    teacher_scores: Tensor,
+    *,
+    student_exponent: float,
+    teacher_exponent: float,
+    student_scale: float,
+    teacher_scale: float,
+    eps: float = 1e-12,
+) -> Tensor:
+    """Return the per-row Pearson loss with fixed, detached row weights.
+
+    Per row ``r`` the loss is ``w_r * (1/k) * ||u(s_r) - u(t_r)||**2 = w_r * (2/k) * (1 - rho_r)``,
+    with ``u`` the row-centered unit vector, ``rho_r`` the within-row Pearson correlation and
+    ``w_r`` from :func:`pearson_row_weights`; the result is the mean over rows.  With both
+    exponents zero every weight is one and the loss is :func:`unit_centered_mse_loss`
+    (up to floating-point summation order).  Because ``w_r`` is detached, the gradient of a
+    row is ``w_r`` times the Pearson gradient of that row: its direction is invariant to a
+    positive rescaling of the row's student scores.  With ``student_exponent = teacher_exponent = 1``
+    the per-row term is ``(2/k) ||P s|| ||P t|| (1 - rho) / (c_s c_t)``, the shape term of the
+    row-centered MSE decomposition, and its gradient is the row-centered MSE gradient with the
+    component along ``P s`` (the part that only changes the row's spread) removed, divided by
+    ``c_s c_t``.
+    """
+    _validate_score_vectors(student_scores, teacher_scores)
+    if eps <= 0.0:
+        raise ValueError(f"eps must be positive; got {eps}.")
+    weights = pearson_row_weights(
+        student_scores,
+        teacher_scores,
+        student_exponent=student_exponent,
+        teacher_exponent=teacher_exponent,
+        student_scale=student_scale,
+        teacher_scale=teacher_scale,
+    )
+    centered_student = student_scores - student_scores.mean(dim=1, keepdim=True)
+    centered_teacher = teacher_scores - teacher_scores.mean(dim=1, keepdim=True)
+    unit_student = functional.normalize(centered_student, p=2.0, dim=1, eps=eps)
+    unit_teacher = functional.normalize(centered_teacher, p=2.0, dim=1, eps=eps)
+    per_row = (unit_student - unit_teacher).square().mean(dim=1)
+    return (weights.to(dtype=per_row.dtype) * per_row).mean()
 
 
 def rank_weighted_pair_mse_loss(

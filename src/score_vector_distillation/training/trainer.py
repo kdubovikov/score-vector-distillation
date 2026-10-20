@@ -27,11 +27,13 @@ from score_vector_distillation.config import (
     MixedPrecision,
     ParameterDType,
     ResolvedConfig,
+    RowWeightConfig,
     SchedulerKind,
     TrainingConfig,
     load_config,
     load_executable_run_config,
 )
+from score_vector_distillation.losses import pearson_row_weights
 from score_vector_distillation.models.profiles import profile_from_mapping
 from score_vector_distillation.models.sentence_transformer import (
     LoraSettings,
@@ -289,6 +291,7 @@ def _validate_candidate_rows(
     loss_kind: DistillationLoss,
     loss_temperature: float | None = None,
     teacher_temperature: float | None = None,
+    row_weighting: RowWeightConfig | None = None,
 ) -> dict[str, float | int]:
     """Measure held-out distillation loss, not full-corpus retrieval quality."""
 
@@ -311,6 +314,7 @@ def _validate_candidate_rows(
             # module docstring above); calling a distributed collective here
             # would hang waiting on ranks that never reach it.
             gather_across_processes=False,
+            row_weighting=row_weighting,
         )
         losses.append(float(validation_loss.cpu()))
         rows += int(teacher.shape[0])
@@ -541,6 +545,7 @@ def _validate_and_checkpoint_epoch(
             loss_kind=prepared.run.training.loss,
             loss_temperature=prepared.run.training.loss_temperature,
             teacher_temperature=getattr(prepared.run.training, "teacher_temperature", None),
+            row_weighting=getattr(prepared.run.training, "row_weighting", None),
         )
         _append_metric(
             metrics_path,
@@ -603,6 +608,29 @@ def _learned_scale_parameter(student: torch.nn.Module) -> torch.nn.Parameter | N
     return None
 
 
+def _row_weight_log(scores: Tensor, teacher: Tensor, row_weighting: RowWeightConfig) -> dict[str, list[float]]:
+    """Return the detached row weights and centered score norms of one micro-batch (logging only)."""
+
+    with torch.no_grad():
+        student = scores.detach().float()
+        target = teacher.detach().float()
+        weights = pearson_row_weights(
+            student,
+            target,
+            student_exponent=row_weighting.student_exponent,
+            teacher_exponent=row_weighting.teacher_exponent,
+            student_scale=row_weighting.student_scale,
+            teacher_scale=row_weighting.teacher_scale,
+        )
+        student_norms = torch.linalg.vector_norm(student - student.mean(dim=1, keepdim=True), dim=1)
+        teacher_norms = torch.linalg.vector_norm(target - target.mean(dim=1, keepdim=True), dim=1)
+    return {
+        "row_weight": [float(value) for value in weights.cpu()],
+        "row_student_centered_norm": [float(value) for value in student_norms.cpu()],
+        "row_teacher_centered_norm": [float(value) for value in teacher_norms.cpu()],
+    }
+
+
 def _json_float(value: float) -> float | None:
     """Return a JSON-safe float (``None`` for a non-finite value)."""
 
@@ -634,6 +662,11 @@ def _run_training_epochs(
     )
     gradient_norm_pre_clip = float("nan")
     score_log_scale_grad = float("nan")
+    row_weighting = getattr(training, "row_weighting", None)
+    # Logging only (WEIGHTED_UNIT_CENTERED_MSE): the detached row weights and centered score
+    # norms of this process's latest micro-batch, recomputed without autograd from the scores
+    # the loss already used; nothing here touches the graph, the RNG or the update.
+    row_weight_log: dict[str, list[float]] = {}
 
     for epoch in range(start_epoch, training.epochs + 1):
         components.student.train()
@@ -646,16 +679,30 @@ def _run_training_epochs(
                     device=accelerator.device,
                 )
                 teacher = batch["teacher_scores"].to(accelerator.device)
-                loss, _ = components.student(
-                    query_features,
-                    document_features,
-                    teacher,
-                    document_chunk_size=prepared.document_chunk_size,
-                    loss=training.loss,
-                    candidate_ids=batch.get("candidate_ids"),
-                    loss_temperature=training.loss_temperature,
-                    teacher_temperature=training.teacher_temperature,
-                )
+                if row_weighting is None:
+                    loss, _ = components.student(
+                        query_features,
+                        document_features,
+                        teacher,
+                        document_chunk_size=prepared.document_chunk_size,
+                        loss=training.loss,
+                        candidate_ids=batch.get("candidate_ids"),
+                        loss_temperature=training.loss_temperature,
+                        teacher_temperature=training.teacher_temperature,
+                    )
+                else:
+                    loss, row_scores = components.student(
+                        query_features,
+                        document_features,
+                        teacher,
+                        document_chunk_size=prepared.document_chunk_size,
+                        loss=training.loss,
+                        candidate_ids=batch.get("candidate_ids"),
+                        loss_temperature=training.loss_temperature,
+                        teacher_temperature=training.teacher_temperature,
+                        row_weighting=row_weighting,
+                    )
+                    row_weight_log = _row_weight_log(row_scores, teacher, row_weighting)
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     if scale_parameter is not None:
@@ -692,6 +739,7 @@ def _run_training_epochs(
                         record["score_scale"] = math.exp(record["score_log_scale"])
                         record["score_log_scale_grad"] = _json_float(score_log_scale_grad)
                         record["score_scale_learning_rate"] = float(components.scheduler.get_last_lr()[1])
+                    record.update(row_weight_log)
                     _append_metric(metrics_path, record)
         _validate_and_checkpoint_epoch(
             prepared,
