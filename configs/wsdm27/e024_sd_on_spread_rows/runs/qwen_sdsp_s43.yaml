@@ -1,0 +1,48 @@
+config_kind: executable_run
+data_config: ../data.yaml
+evaluation:
+  aggregation: dataset_macro
+  metric_k_values:
+  - 10
+  - 100
+  primary_metric: NDCG@10
+  similarity: normalized_cosine
+  top_k: 100
+name: e024_qwen_sdsp_s43
+reference_hardware:
+  accelerator: AMD MI210
+  count: 8
+schema_version: 1
+student_config: ../qwen3_0p6b.yaml
+teacher_configs:
+- ../qwen3_8b.yaml
+teacher_weights:
+  qwen3_8b: 1.0
+training:
+  backbone_gradient_checkpointing: false
+  candidate_checkpointing:
+    document_chunk_size: 4
+    encode_query_once: true
+    preserve_rng_state: true
+  effective_batch_size: 16
+  epochs: 1
+  gradient_accumulation_steps: 2
+  learning_rate: 1.0e-05
+  lora:
+    alpha: 128
+    dropout: 0.05
+    rank: 64
+    target_modules:
+    - q_proj
+    - v_proj
+  loss: centered_mse
+  max_gradient_norm: 1.0
+  mixed_precision: none
+  parameter_dtype: float32
+  per_device_batch_size: 1
+  reference_world_size: 8
+  scheduler: cosine
+  seeds:
+  - 43
+  warmup_ratio: 0.03
+  weight_decay: 0.01

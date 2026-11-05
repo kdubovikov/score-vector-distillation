@@ -192,7 +192,9 @@ def test_margin_only_handles_batches_as_row_mean() -> None:
     torch.testing.assert_close(per_row[0], _margin_reference(student[:1], teacher[:1]).square()[0])
     # the loss is invariant to a per-row additive offset of the student scores
     shifted = student + torch.tensor([[1.0], [-2.0], [0.5], [3.0]], dtype=student.dtype)
-    torch.testing.assert_close(margin_only_loss(shifted, teacher), margin_only_loss(student, teacher), atol=1e-12, rtol=0.0)
+    torch.testing.assert_close(
+        margin_only_loss(shifted, teacher), margin_only_loss(student, teacher), atol=1e-12, rtol=0.0
+    )
 
 
 def test_margin_only_single_candidate_is_differentiable_zero() -> None:

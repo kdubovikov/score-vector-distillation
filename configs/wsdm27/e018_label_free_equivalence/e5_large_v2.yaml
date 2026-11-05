@@ -1,0 +1,12 @@
+{
+  "append_eos": false,
+  "attention_implementation": "eager",
+  "document_template": "passage: {text}",
+  "label": "e5_large_v2",
+  "max_length": 512,
+  "model_id": "intfloat/e5-large-v2",
+  "query_template": "query: {text}",
+  "revision": "f169b11e22de13617baa190a028a32f3493550b6",
+  "schema_version": 1,
+  "trust_remote_code": false
+}

@@ -1,0 +1,11 @@
+schema_version: 1
+label: qwen3_reranker_8b
+model_id: Qwen/Qwen3-Reranker-8B
+revision: 77d193c791ed757ca307ee72715aa132723da912
+teacher_kind: qwen3_yes_no_reranker
+attention_implementation: sdpa
+instruction: Given a web search query, retrieve relevant passages that answer the query
+max_document_tokens: 512
+teacher_scoring:
+  dtype: bfloat16
+  pair_batch_size: 32

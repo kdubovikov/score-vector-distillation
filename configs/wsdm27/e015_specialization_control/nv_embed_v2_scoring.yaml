@@ -1,0 +1,22 @@
+append_eos: true
+attention_implementation: eager
+dataset_instructions:
+  fiqa: Given a financial question, retrieve relevant passages that answer the query
+  msmarco: Given a web search query, retrieve relevant passages that answer the query
+  nfcorpus: Given a question, retrieve relevant documents that answer the question
+  scifact: Given a scientific claim, retrieve documents that support or refute the
+    claim
+document_template: '{text}'
+label: nv_embed_v2
+max_length: 32768
+model_id: nvidia/NV-Embed-v2
+query_template: 'Instruct: {instruction}
+
+  Query: {text}'
+revision: 3fa59658547db50a1e8e3346cf057fd0c77ed6ef
+schema_version: 1
+teacher_scoring:
+  document_batch_size: 1
+  dtype: bfloat16
+  query_batch_size: 1
+trust_remote_code: true

@@ -1,24 +1,8 @@
-# Score-Only Distillation for Compact Dense Retrieval
+# What Score Distillation Transfers to Compact Dense Retrievers
 
-Reference implementation for [**Score-Only Distillation for Compact Dense Retrieval**](https://arxiv.org/abs/2607.11465).
+Reference implementation for **What Score Distillation Transfers to Compact Dense Retrievers** (under review).
 
-The method transfers a teacher ensemble's relative preferences over a fixed candidate row into a compact bi-encoder. It needs only scalar teacher scores: no hidden states, tokenizer sharing, or teacher gradients.
-
-## Method in one equation
-
-For student scores \(s\in\mathbb{R}^{B\times k}\) and teacher scores \(t\), define residuals \(r=s-t\). The training objective is
-
-\[
-\mathcal{L}_{\mathrm{centered}}
-= \frac{1}{Bk}\sum_{b=1}^{B}\sum_{i=1}^{k}
-\left(r_{bi}-\bar r_b\right)^2.
-\]
-
-\[
-\mathcal{L}_{\mathrm{ordered\ pairs}}=2\,\mathcal{L}_{\mathrm{centered}}.
-\]
-
-Provided unit tests compare both values and gradients against an explicit \(O(Bk^2)\) construction.
+A compact bi-encoder student learns a large embedding teacher's similarity scores over a fixed row of 32 candidate documents per query. The code covers the losses compared in the paper (PairMSE, per-row Pearson, row-weighted Pearson, learned-scale PairMSE, MarginMSE, listwise KL, one-hot targets and a label-only in-batch contrastive baseline), the row types (TF-IDF, teacher-mined with a positive-aware filter, label-free teacher top-32, rows spread across the teacher's ranking), and deterministic full-corpus BEIR evaluation. The executable configuration of every run in the paper is under [`configs/wsdm27`](configs/wsdm27); see [Paper runs](#paper-runs-wsdm-27) below.
 
 ## Training update
 
@@ -163,7 +147,32 @@ Reported numbers are committed under
 [`artifacts/paper/results`](artifacts/paper/results) as aggregate reference
 outputs.
 
-## Paper configurations
+## Paper runs (WSDM '27)
+
+Every training run reported in the paper has an executable run config under [`configs/wsdm27/<experiment>/runs/`](configs/wsdm27). Each experiment directory also holds the shared data, student and teacher configs the runs reference. All runs use query/value LoRA (rank 64, alpha 128), one epoch, and the Qwen3-Embedding-8B teacher unless the config lists another; seeds are 42-44. The results in the paper were produced at commit `a581a25` (tag `wsdm27-results`).
+
+| Paper item | Loss (`training.loss`) | Experiment directories |
+|---|---|---|
+| Table 1 / 2a, TF-IDF distillation (single and fused teacher) | `centered_mse` (PairMSE) | `e013_reranker_teacher_results` (`q8_qv_s42`), `e015_specialization_control`, `e021_seed_replication`, `kl_matched` |
+| Table 1 / 2b, label-only baseline | `label_only_inbatch_cross_entropy` | `e012_label_only_e5_results`, `e022_hardneg_and_msmarco_seeds` |
+| Table 2a, Pearson vs PairMSE on TF-IDF rows | `unit_centered_mse` (Pearson), `centered_mse` | `e025_scale_invariant_on_mined_rows`, `e036_three_seed_table` |
+| Table 2b, PairMSE and Pearson on teacher-mined rows | `centered_mse`, `unit_centered_mse` | `e023_sd_on_mined_rows`, `e025_scale_invariant_on_mined_rows` |
+| Table 2b, learned scale | `scale_matched_centered_mse` | `e028_loss_baselines_on_mined_rows`, `e036_three_seed_table` |
+| Table 2b, L_w with w = ‖Ps‖‖Pt‖ | `weighted_unit_centered_mse` | `e032_row_weighting_on_mined_rows`, `e034_seed_replication_wpa_kl`, `e036_three_seed_table` |
+| Table 2b, MarginMSE | `positive_negative_margin_mse` | `e028_loss_baselines_on_mined_rows`, `e036_three_seed_table` |
+| Table 2b, tuned listwise KL | `forward_kl_teacher_temperature` | `e028_loss_baselines_on_mined_rows`, `e034_seed_replication_wpa_kl` |
+| Table 2b, one-hot target (and on TF-IDF rows, Section 5.3) | `unit_centered_mse` on one-hot targets | `e026_onehot_target_control`, `e029_onehot_on_tfidf_rows` |
+| Table 2c, label-free teacher rows and top-1 pseudo-label | `unit_centered_mse`, `centered_mse` | `e027_label_free_mined_rows`, `e030_top1_pseudolabel_on_label_free_rows`, `e036_three_seed_table` |
+| Figure 1 / Section 5.2, spread rows | `centered_mse`, `unit_centered_mse` | `e024_sd_on_spread_rows`, `e035_pearson_on_spread_rows` |
+| Section 5.4, MS MARCO and label-free TF-IDF controls | `centered_mse` | `e015_specialization_control`, `e018_label_free_equivalence`, `e022_hardneg_and_msmarco_seeds` |
+| Section 5.5, margin-only and corrupted negatives | `margin_only`, `centered_mse` | `e014`, `e016`, `e017`, `e019`, `e020`, `e021` |
+
+Teacher-mined rows are built with [`data/teacher_mining.py`](src/score_vector_distillation/data/teacher_mining.py) (the teacher's top 31 after removing labeled documents and every document above 95% of the positive's score) and spread rows with [`data/teacher_spread.py`](src/score_vector_distillation/data/teacher_spread.py). A run is trained and evaluated as below, with `--config` pointing at the run config and `--train-file` at the matching row Parquet.
+
+## Earlier configurations
+
+The configurations below belong to an earlier version of this work (LoRA rank 256 on all linear layers) and are kept for reference.
+
 
 - [`configs/paper/runs/qwen_main.yaml`](configs/paper/runs/qwen_main.yaml): Qwen3-Embedding-0.6B student, \(k=32\), three seeds, LoRA rank 256, effective batch 16, checkpointed document chunks of four.
 - [`configs/paper/runs/e5_main.yaml`](configs/paper/runs/e5_main.yaml): E5-large-v2 family replication, three seeds, LoRA rank 64.

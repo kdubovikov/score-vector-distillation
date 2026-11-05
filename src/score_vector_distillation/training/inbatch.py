@@ -56,7 +56,7 @@ def _gather_embeddings(local_embeddings: Tensor, *, gather_across_processes: boo
     # the standard SimCLR/MNRL in-batch-negative pattern.
     from torch.distributed.nn.functional import all_gather as differentiable_all_gather
 
-    gathered = differentiable_all_gather(local_embeddings)
+    gathered = differentiable_all_gather(local_embeddings)  # type: ignore[no-untyped-call]
     return torch.cat(list(gathered), dim=0), rank
 
 
